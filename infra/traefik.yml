@@ -1,0 +1,30 @@
+# Traefik static configuration for the shared dev proxy. Mounted read-only by infra/compose.yml.
+#
+# File provider rather than the Docker provider: the things being routed to are dev servers running
+# on the HOST, which Docker cannot discover. `scripts/dev/host-mode/proxy.mjs` writes one file per
+# running checkout into the watched directory; Traefik hot-reloads, so no restart is ever needed.
+#
+# Plain HTTP only, and that is not a limitation to fix. Browsers treat `*.localhost` as a
+# potentially-trustworthy origin, so service workers, WebAuthn and crypto.subtle all work over
+# http:// here, and adding TLS would mean a local CA that Windows and WSL both have to trust.
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    directory: /routes
+    watch: true
+
+# Dev-only posture: the dashboard is off and no API is exposed. Nothing here should be reachable
+# beyond the loopback bind in compose.yml.
+api:
+  dashboard: false
+
+log:
+  level: WARN
+
+# No `accessLog` key on purpose. Access logging is OFF unless the key is present (an empty
+# `accessLog: {}` would switch it ON with defaults), and every asset request and HMR websocket frame
+# would otherwise land in `docker logs`, drowning the occasional routing error worth reading.

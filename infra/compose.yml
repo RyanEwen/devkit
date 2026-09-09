@@ -1,0 +1,57 @@
+# Shared developer infrastructure for multi-checkout dev mode: ONE proxy and ONE Postgres for
+# every project and worktree on the machine. Started once by `npm run dev:bootstrap` and left
+# running; `npm run dev` only ever checks that it is up.
+#
+# Deliberately NOT referenced by anything in the repo's own Compose files. In particular there is no
+# `external: true` network anywhere in this design: a missing external network makes `docker compose
+# up` fail outright, so a contributor who never opted into this mode would be broken by
+# infrastructure they were never told about. Traefik reaches host processes over
+# `host.docker.internal` instead, which needs no shared network at all.
+#
+# Bound to 127.0.0.1 on both published ports. These carry a throwaway password and no auth, so they
+# must not be reachable from the LAN; on WSL the loopback bind is still reachable from Windows,
+# which is the whole point.
+
+services:
+  # Routes `<worktree>.<repo>.localhost` to whichever host port that checkout's Vite is on. Routes
+  # are generated files under ./routes (see host-mode/proxy.mjs), watched and hot-reloaded, so
+  # starting a second checkout never interrupts the first.
+  proxy:
+    # Floating major tag on purpose: this is dev-only infrastructure that wants Traefik's v3
+    # security updates, and pinning an exact patch here would mean pinning whatever was current when
+    # this file was written. Pin one if you ever need a reproducible proxy.
+    image: traefik:v3
+    restart: always
+    ports:
+      - "127.0.0.1:${PRINTSTREAM_DEV_PROXY_PORT:-80}:80"
+    volumes:
+      - ${PRINTSTREAM_DEV_ROUTES_DIR:?routes directory must be set}:/routes:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+    # Lets a container-side route reach a dev server running on the host. Docker Desktop provides
+    # this name natively; the explicit host-gateway mapping is what makes it resolve on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # One server, one database per checkout. Same major as the devcontainer's `db` service
+  # (.devcontainer/compose.yml) on purpose, so a baseline captured under one restores under the
+  # other and you can move between the two modes without rebuilding your dev data.
+  postgres:
+    image: postgres:16-bookworm
+    restart: always
+    ports:
+      - "127.0.0.1:${PRINTSTREAM_DEV_POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${PRINTSTREAM_DEV_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${PRINTSTREAM_DEV_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PRINTSTREAM_DEV_POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - devinfra-postgres:/var/lib/postgresql/data
+
+volumes:
+  devinfra-postgres:
+    name: printstream-devinfra-postgres

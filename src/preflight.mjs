@@ -1,0 +1,167 @@
+/**
+ * Everything that must be true before a project's dev servers start, and the environment they need.
+ *
+ * The contract this module keeps: **there are no setup steps, only preconditions.** Each one is
+ * checked and repaired on every run, so nothing has an order to remember, nothing can be skipped,
+ * and running twice does nothing the second time. A precondition that cannot be repaired (no
+ * Docker) stops the run naming the exact command that fixes it, rather than letting a project's
+ * watchers start against infrastructure that is not there.
+ *
+ * Returns `null` before touching Docker, Postgres or the filesystem when devkit is off. See
+ * `config.mjs` for why that is a hard guarantee rather than best-effort.
+ *
+ * Counterparts: `infra/compose.yml` (what `ensureInfra` starts) and each project's
+ * `devkit.config.mjs` (which supplies the env its servers read).
+ */
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
+
+import { baselineDatabaseName, checkoutIdentity, checkoutPorts } from './checkout-identity.mjs'
+import { checkoutConnectionUrl, devkitConfig } from './config.mjs'
+import { appliedMigrationCount, ensureCheckoutDatabase } from './database.mjs'
+import { baselineAgeDays, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
+import { composeUp, infraComposeEnv, postgresSql, probeDocker } from './docker.mjs'
+import { loadProjectConfig } from './project-config.mjs'
+import { writeRoute } from './proxy.mjs'
+
+/** Fails the run with a message that names the fix, rather than a stack trace. */
+export class PreflightError extends Error {
+  constructor(reason, fix) {
+    super(fix ? `${reason}\n       fix: ${fix}` : reason)
+    this.name = 'PreflightError'
+  }
+}
+
+/**
+ * Runs every precondition and returns what the dev servers need, or `null` when devkit is off.
+ *
+ * Ordering matters in one place only: the database must exist before the project applies its
+ * migrations, which is why this is called before that step rather than alongside it.
+ */
+export async function preflight({ repoRoot, log = console.log }) {
+  const config = devkitConfig()
+  if (!config) return null
+
+  const identity = checkoutIdentity(repoRoot)
+  if (!identity) return null
+
+  const project = await loadProjectConfig(repoRoot)
+  const ports = checkoutPorts(identity, project.ports)
+  const lines = []
+
+  const docker = probeDocker()
+  if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
+
+  ensureInfra(config, log)
+  waitForPostgres(config)
+
+  const database = ensureCheckoutDatabase(config, identity)
+  if (database.error) throw new PreflightError(`could not create database ${database.name}: ${database.error}`)
+  if (database.created) {
+    lines.push(
+      database.sourced === 'baseline'
+        ? `database ${database.name} cloned from ${baselineDatabaseName(identity)}`
+        : `database ${database.name} created EMPTY (no baseline yet -- run \`devkit snapshot\` from the primary checkout)`
+    )
+    if (database.warning) lines.push(`baseline clone failed, fell back to empty: ${database.warning}`)
+  }
+
+  // Only when the project actually seeds files: a project with no `baselinePaths` has nothing on
+  // disk to restore, and probing for it would report a missing archive it never wanted.
+  if (project.baselinePaths.length > 0 && checkoutNeedsData(repoRoot)) {
+    const restored = restoreDataBaseline(config, identity, repoRoot)
+    if (restored.ok) lines.push(`data/ restored from baseline (${formatBytes(restored.bytes)})`)
+    else if (!restored.missing) lines.push(`data/ could not be restored: ${restored.error}`)
+  }
+
+  writeRoute(config, identity, ports.web)
+
+  const age = baselineAgeDays(config, identity)
+  if (age !== null && age > config.baselineMaxAgeDays) {
+    lines.push(`baseline is ${Math.floor(age)} days old -- \`devkit snapshot\` refreshes it`)
+  }
+
+  const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
+  const context = {
+    identity,
+    ports,
+    url,
+    directUrl: `http://localhost:${ports.web}`,
+    databaseUrl: checkoutConnectionUrl(config, identity.databaseName),
+    configDir: config.configDir
+  }
+
+  return {
+    ...context,
+    config,
+    project,
+    lines,
+    /** Applied-migration count before the project migrates, so a caller can detect a schema move. */
+    migrationsBefore: appliedMigrationCount(config, identity.databaseName, project.migrationsTable),
+    env: { ...baseEnv(context), ...project.env(context) }
+  }
+}
+
+/**
+ * The environment devkit publishes for every project, before the project's own `env()` runs.
+ *
+ * Only values devkit alone can know: where the database is, what this checkout is called, and the
+ * two Vite settings that the PROXY requires rather than the project. Everything else is the
+ * project's to name, because only it knows which variables its servers read.
+ */
+function baseEnv({ identity, ports, url, databaseUrl }) {
+  return {
+    DATABASE_URL: databaseUrl,
+    DEVKIT_URL: url,
+    DEVKIT_HOSTNAME: identity.hostname,
+    /**
+     * The proxy reaches this checkout over `host.docker.internal`, and Docker Desktop's forwarding
+     * on Windows/WSL only relays IPv4-bound listeners: Vite's `host: true` binds the IPv6 wildcard,
+     * which that path refuses, so the route 502s while the direct port serves fine. Binding all
+     * IPv4 interfaces is what the proxy needs and costs nothing here, since these are
+     * loopback-published dev servers either way.
+     */
+    VITE_DEV_HOST: '0.0.0.0',
+    /** Vite rejects an unknown Host header, and every request arrives from the proxy carrying it. */
+    VITE_DEV_ALLOWED_HOSTS: [identity.hostname, 'localhost', '127.0.0.1'].join(',')
+  }
+}
+
+/** Brings the shared stack up. Idempotent, so this runs on every start without costing anything. */
+function ensureInfra(config, log) {
+  const composeFile = path.join(config.infraDir, 'compose.yml')
+  mkdirSync(config.routesDir, { recursive: true })
+  const started = composeUp(config.infraProject, [composeFile], {
+    cwd: config.infraDir,
+    env: infraComposeEnv(config)
+  })
+  if (!started) {
+    throw new PreflightError(
+      `the shared dev infrastructure at ${config.infraDir} could not be started`,
+      'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
+    )
+  }
+  log?.('[devkit] shared infrastructure ready')
+}
+
+/** Postgres accepts TCP before it accepts queries; poll until a trivial query succeeds. */
+function waitForPostgres(config, { attempts = 30, delayMs = 500 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (postgresSql(config, 'select 1').ok) return
+    sleepSync(delayMs)
+  }
+  throw new PreflightError(
+    'the shared Postgres did not become ready',
+    `check \`docker compose -p ${config.infraProject} logs postgres\``
+  )
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return 'unknown size'
+  const mb = bytes / 1_048_576
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
+}

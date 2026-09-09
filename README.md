@@ -1,0 +1,107 @@
+# devkit
+
+Gives every checkout and worktree on your machine its own `*.localhost` hostname, its own database
+and its own ports, all **derived from its path**, so several projects and several worktrees of one
+project can run at the same time without renumbering anything.
+
+Nothing is ever allocated, recorded or reclaimed. Delete a worktree and its names simply stop being
+produced; `devkit prune` finds orphaned databases by re-deriving the live set and diffing it against
+what exists, never by reading a registry that could drift.
+
+```
+printstream          -> http://printstream.localhost
+  worktree fix-123   -> http://fix-123.printstream.localhost
+game-is-up           -> http://game-is-up.localhost
+```
+
+## What it sets up
+
+One shared stack for the whole machine, installed outside every repo at `~/.config/devkit`:
+
+| Piece | Purpose |
+| --- | --- |
+| Traefik on `127.0.0.1:80` | routes each `*.localhost` hostname to that checkout's dev server |
+| One Postgres on `127.0.0.1:5432` | one database per checkout, cloned from a per-project baseline |
+| `~/.config/devkit/routes` | one generated route file per running checkout, hot-reloaded |
+| `~/.config/devkit/baselines` | the database + seed-data baseline a new worktree starts from |
+
+`*.localhost` resolves to loopback in browsers and on Windows with no hosts file and no DNS, which
+is what makes this setup-free.
+
+## Install
+
+```bash
+npm install --save-dev github:RyanEwen/devkit
+npx devkit bootstrap        # once per machine
+```
+
+`bootstrap` installs and starts the shared stack, writes the marker that switches devkit on, and
+links `devkit` and `devproxy` onto your PATH.
+
+## Off unless you turn it on
+
+**When devkit is off it does not run.** Not "fails gracefully": every Docker call, database probe
+and proxy write sits behind the marker file existing, so a contributor who clones your repo without
+running `bootstrap` gets exactly the behaviour they would have had if you had never added it. This
+matters because dev scripts ship in public repos.
+
+Three ways it stays off, checked in order: `DEVKIT=0`, running inside a container (the devcontainer
+owns ports and networking there), or no marker file.
+
+## Using it in a project
+
+Add a `devkit.config.mjs` naming the few things devkit cannot derive:
+
+```js
+export default {
+  ports: ['web', 'api'],                 // named offsets in this checkout's port block, in order
+  migrationsTable: '_prisma_migrations', // null if the project has no migrations
+  baselinePaths: ['data/uploads'],       // repo-relative files a new worktree should start with
+  env: ({ ports, url, identity }) => ({  // whatever YOUR dev servers read
+    API_PORT: String(ports.api),
+    CLIENT_ORIGIN: url,
+    VITE_API_PORT: String(ports.api)
+  })
+}
+```
+
+Then call `preflight()` from whatever starts your dev servers:
+
+```js
+import { preflight } from '@ryanewen/devkit'
+
+const devkit = await preflight({ repoRoot })
+if (devkit) Object.assign(process.env, devkit.env)   // null when devkit is off
+```
+
+`preflight()` brings the shared stack up, creates or clones this checkout's database, restores its
+seed data, registers its proxy route, and returns the environment plus the URLs it resolved to.
+
+devkit itself publishes only what it alone can know: `DATABASE_URL`, `DEVKIT_URL`,
+`DEVKIT_HOSTNAME`, and the two Vite settings the **proxy** requires (`VITE_DEV_HOST` and
+`VITE_DEV_ALLOWED_HOSTS`). Everything else is your `env()` to name, because only your project knows
+which variables its servers read.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `devkit doctor` | the state of every precondition, and the command that fixes each |
+| `devkit snapshot` | capture this checkout's data as the baseline new checkouts clone |
+| `devkit reset` | drop and re-clone this worktree's database (`--empty` skips the baseline) |
+| `devkit prune` | drop databases whose worktree is gone (`--yes` to actually drop) |
+| `devkit infra` | restart the shared stack, e.g. after Docker Desktop restarted |
+| `devproxy add <name> <port>` | give any dev server a `*.localhost` name, devkit project or not |
+
+`devkit reset` deliberately refuses on the primary checkout: that database is the real dev data a
+baseline is captured *from*, not a disposable copy.
+
+## Two rules worth knowing
+
+**A worktree needs its own `npm install`.** `node_modules` is per-checkout, and nothing here changes
+that.
+
+**Ports are a preference, not a reservation.** The browser reaches your app through the proxy by
+hostname, so a port collision is a nuisance rather than data loss. Blocks are hashed from the
+checkout slug (which includes the repo name), so two different projects collide no more often than
+two worktrees of one; `DEVKIT_PORT_BASE` overrides it for a single checkout.
