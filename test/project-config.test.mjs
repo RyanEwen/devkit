@@ -17,6 +17,7 @@ test('a project with no config gets defaults rather than an error', async () => 
   const config = await withConfig(null)
   assert.deepEqual(config.ports, ['web', 'api'])
   assert.deepEqual(config.baselinePaths, [])
+  assert.deepEqual(config.worktreeFiles, [])
   assert.equal(config.configPath, null)
   assert.deepEqual(config.env({}), {})
 })
@@ -30,6 +31,7 @@ test('a config overrides only what it names', async () => {
   assert.equal(config.migrationsTable, '__drizzle_migrations')
   // Untouched fields keep their defaults rather than becoming undefined.
   assert.deepEqual(config.baselinePaths, [])
+  assert.deepEqual(config.worktreeFiles, [])
   assert.equal(typeof config.env, 'function')
 })
 
@@ -52,6 +54,7 @@ test('a malformed config is rejected with a message naming the field', async () 
   await assert.rejects(withConfig('export default { ports: ["web", "web"] }'), /must not repeat/)
   await assert.rejects(withConfig('export default { env: 42 }'), /`env` must be a function/)
   await assert.rejects(withConfig('export default { checks: [1] }'), /`checks` must be an array of functions/)
+  await assert.rejects(withConfig('export default { worktreeFiles: ".env" }'), /`worktreeFiles` must be an array/)
   await assert.rejects(withConfig('export default 42'), /must `export default` an object/)
 })
 

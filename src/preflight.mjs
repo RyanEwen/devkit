@@ -16,13 +16,14 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { baselineDatabaseName, checkoutIdentity, checkoutPorts } from './checkout-identity.mjs'
+import { baselineDatabaseName, checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
 import { checkoutConnectionUrl, devkitConfig } from './config.mjs'
 import { appliedMigrationCount, ensureCheckoutDatabase, snapshotBaseline } from './database.mjs'
 import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
 import { composeUp, infraComposeEnv, postgresSql, probeDocker } from './docker.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { writeRoute } from './proxy.mjs'
+import { copyWorktreeFiles } from './worktree-files.mjs'
 
 /** Fails the run with a message that names the fix, rather than a stack trace. */
 export class PreflightError extends Error {
@@ -48,6 +49,12 @@ export async function preflight({ repoRoot, log = console.log }) {
   const project = await loadProjectConfig(repoRoot)
   const ports = checkoutPorts(identity, project.ports)
   const lines = []
+
+  // Callers that consume one of these files before preflight can invoke inheritWorktreeFiles()
+  // early. Everyone else still gets the guarantee here; copying twice is an idempotent no-op.
+  const inherited = copyWorktreeFiles({ checkout: readGitCheckout(repoRoot), project })
+  for (const file of inherited.copied) lines.push(`${file} inherited from the primary checkout`)
+  for (const file of inherited.missing) lines.push(`${file} missing here and in the primary checkout`)
 
   const docker = probeDocker()
   if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)

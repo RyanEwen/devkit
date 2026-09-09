@@ -57,6 +57,7 @@ export default {
   ports: ['web', 'api'],                 // named offsets in this checkout's port block, in order
   migrationsTable: '_prisma_migrations', // null if the project has no migrations
   baselinePaths: ['data/uploads'],       // repo-relative files a new worktree should start with
+  worktreeFiles: ['.env'],               // ignored local config inherited when absent
   env: ({ ports, url, identity }) => ({  // whatever YOUR dev servers read
     API_PORT: String(ports.api),
     CLIENT_ORIGIN: url,
@@ -65,17 +66,21 @@ export default {
 }
 ```
 
-Then call `preflight()` from whatever starts your dev servers:
+Then call `preflight()` from whatever starts your dev servers. If the runner reads one of its
+`worktreeFiles` first (for example, it loads `.env` itself), inherit those before reading it:
 
 ```js
-import { preflight } from '@ryanewen/devkit'
+import { inheritWorktreeFiles, preflight } from '@ryanewen/devkit'
 
+await inheritWorktreeFiles({ repoRoot })
+// Load .env here, if this runner owns that step.
 const devkit = await preflight({ repoRoot })
 if (devkit) Object.assign(process.env, devkit.env)   // null when devkit is off
 ```
 
 `preflight()` brings the shared stack up, creates or clones this checkout's database, restores its
-seed data, registers its proxy route, and returns the environment plus the URLs it resolved to.
+seed data, inherits missing `worktreeFiles` from the primary checkout, registers its proxy route,
+and returns the environment plus the URLs it resolved to. It never overwrites a worktree file.
 
 devkit itself publishes only what it alone can know: `DATABASE_URL`, `DEVKIT_URL`,
 `DEVKIT_HOSTNAME`, and the two Vite settings the **proxy** requires (`VITE_DEV_HOST` and
@@ -99,7 +104,8 @@ baseline is captured *from*, not a disposable copy.
 ## Two rules worth knowing
 
 **A worktree needs its own `npm install`.** `node_modules` is per-checkout, and nothing here changes
-that.
+that. Ignored configuration explicitly listed in `worktreeFiles` is copied from the primary
+checkout on first start; caches and every other ignored path stay local.
 
 **Ports are a preference, not a reservation.** The browser reaches your app through the proxy by
 hostname, so a port collision is a nuisance rather than data loss. Blocks are hashed from the

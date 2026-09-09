@@ -3,9 +3,9 @@
  *
  * The split this file defines is the whole design. devkit owns what is the same everywhere (how a
  * checkout is named, which ports it gets, how its database is cloned, how it is proxied) and knows
- * nothing about any project. A project owns the five things that genuinely differ, and NOTHING
- * else: its ports, the env its dev servers read, its migration table, the data its baseline
- * captures, and any extra doctor checks.
+ * nothing about any project. A project owns the things that genuinely differ: its ports, the env
+ * its dev servers read, its migration table, the data its baseline captures, local files a linked
+ * worktree must inherit, and any extra doctor checks.
  *
  * Absent config is not an error. A project with no `devkit.config.mjs` gets the defaults, which is
  * a web + api pair with no seeded data, and that is a working setup for most repos.
@@ -34,6 +34,8 @@ const DEFAULTS = {
   migrationsTable: '_prisma_migrations',
   /** Repo-relative paths captured alongside the database so a new worktree starts usable. */
   baselinePaths: [],
+  /** Ignored, repo-relative files copied from the primary checkout when a worktree lacks them. */
+  worktreeFiles: [],
   /** Returns the environment the project's dev servers need. See `preflight.mjs` for the argument. */
   env: () => ({}),
   /**
@@ -59,6 +61,9 @@ function validate(config) {
     fail('`migrationsTable` must be a string, or null for a project with no migrations')
   }
   if (!Array.isArray(config.baselinePaths)) fail('`baselinePaths` must be an array of repo-relative paths')
+  if (!Array.isArray(config.worktreeFiles) || config.worktreeFiles.some((file) => typeof file !== 'string')) {
+    fail('`worktreeFiles` must be an array of repo-relative paths')
+  }
   if (typeof config.env !== 'function') fail('`env` must be a function returning an object')
   if (!Array.isArray(config.checks) || config.checks.some((check) => typeof check !== 'function')) {
     fail('`checks` must be an array of functions')
