@@ -6,7 +6,7 @@
  * reached through the `devkit` binary, not through imports, so this stays small enough to keep
  * stable across versions consuming repos pin independently.
  */
-export { preflight, PreflightError } from './preflight.mjs'
+export { preflight, refreshBaselineAfterMigrations, PreflightError } from './preflight.mjs'
 export { writeRoute, removeRoute, routeFilePath } from './proxy.mjs'
 export { checkoutIdentity, checkoutPorts, baselineDatabaseName } from './checkout-identity.mjs'
 export { devkitConfig, devkitConfigDir, devkitMarkerPath } from './config.mjs'

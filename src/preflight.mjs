@@ -18,8 +18,8 @@ import path from 'node:path'
 
 import { baselineDatabaseName, checkoutIdentity, checkoutPorts } from './checkout-identity.mjs'
 import { checkoutConnectionUrl, devkitConfig } from './config.mjs'
-import { appliedMigrationCount, ensureCheckoutDatabase } from './database.mjs'
-import { baselineAgeDays, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
+import { appliedMigrationCount, ensureCheckoutDatabase, snapshotBaseline } from './database.mjs'
+import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
 import { composeUp, infraComposeEnv, postgresSql, probeDocker } from './docker.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { writeRoute } from './proxy.mjs'
@@ -164,4 +164,34 @@ function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return 'unknown size'
   const mb = bytes / 1_048_576
   return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+/**
+ * Refreshes the baseline after the PRIMARY checkout moves the schema forward.
+ *
+ * This is the event that matters, not the calendar: a migration reaching the primary checkout is
+ * exactly when every future checkout should start from newer data. Worktrees never trigger it,
+ * because their schema is a branch's, not the trunk's.
+ *
+ * Best-effort by contract: it runs after the dev servers are already up, and a failure logs rather
+ * than interrupting a working session. `state` is what `preflight()` returned.
+ */
+export function refreshBaselineAfterMigrations(state, { log = console.log } = {}) {
+  if (!state?.identity.isPrimary) return
+  const after = appliedMigrationCount(state.config, state.identity.databaseName, state.project.migrationsTable)
+  if (after === null || state.migrationsBefore === null || after <= state.migrationsBefore) return
+
+  const snapshot = snapshotBaseline(state.config, state.identity)
+  if (!snapshot.ok) {
+    log(`[devkit] baseline refresh skipped: ${snapshot.error}`)
+    return
+  }
+  const captured = state.project.baselinePaths.length === 0
+    ? { ok: true }
+    : captureDataBaseline(state.config, state.identity, state.identity.toplevel, state.project.baselinePaths)
+  log(
+    captured.ok
+      ? `[devkit] baseline refreshed after ${after - state.migrationsBefore} new migration(s); previous kept as ${snapshot.previous}`
+      : `[devkit] baseline database refreshed but the data capture failed: ${captured.error}`
+  )
 }
