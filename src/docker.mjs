@@ -65,11 +65,11 @@ export function composeUp(project, files, { cwd, services = [], env } = {}) {
 /** Environment the infra Compose file interpolates. Keep in sync with `infra/compose.yml`. */
 export function infraComposeEnv(config) {
   return {
-    PRINTSTREAM_DEV_ROUTES_DIR: config.routesDir,
-    PRINTSTREAM_DEV_PROXY_PORT: String(config.proxyPort),
-    PRINTSTREAM_DEV_POSTGRES_PORT: String(config.postgres.port),
-    PRINTSTREAM_DEV_POSTGRES_USER: config.postgres.user,
-    PRINTSTREAM_DEV_POSTGRES_PASSWORD: config.postgres.password
+    DEVKIT_ROUTES_DIR: config.routesDir,
+    DEVKIT_PROXY_PORT: String(config.proxyPort),
+    DEVKIT_POSTGRES_PORT: String(config.postgres.port),
+    DEVKIT_POSTGRES_USER: config.postgres.user,
+    DEVKIT_POSTGRES_PASSWORD: config.postgres.password
   }
 }
 
