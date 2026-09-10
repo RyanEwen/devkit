@@ -30,6 +30,8 @@ const DEFAULTS = {
   name: null,
   /** Named port offsets within this checkout's block, in order. */
   ports: ['web', 'api'],
+  /** Database backend and optional primary database name. Existing projects default to Postgres. */
+  database: { engine: 'postgres', name: null },
   /** The migration bookkeeping table, so `doctor` can report how far a database has been migrated. */
   migrationsTable: '_prisma_migrations',
   /** Repo-relative paths captured alongside the database so a new worktree starts usable. */
@@ -57,6 +59,15 @@ function validate(config) {
   }
   if (config.ports.length === 0) fail('`ports` must name at least one port')
   if (new Set(config.ports).size !== config.ports.length) fail('`ports` must not repeat a name')
+  if (!config.database || typeof config.database !== 'object' || Array.isArray(config.database)) {
+    fail('`database` must be an object with an `engine` and optional `name`')
+  }
+  if (!['postgres', 'mariadb'].includes(config.database.engine)) {
+    fail('`database.engine` must be "postgres" or "mariadb"')
+  }
+  if (config.database.name != null && !/^[a-z0-9_]+$/.test(config.database.name)) {
+    fail('`database.name` must contain only lowercase letters, numbers, and underscores')
+  }
   if (config.migrationsTable != null && typeof config.migrationsTable !== 'string') {
     fail('`migrationsTable` must be a string, or null for a project with no migrations')
   }
@@ -83,6 +94,17 @@ export async function loadProjectConfig(repoRoot) {
   const module = await import(pathToFileURL(configPath).href)
   const provided = module.default
   if (!provided || typeof provided !== 'object') fail('must `export default` an object')
+  if (
+    provided.database !== undefined &&
+    (!provided.database || typeof provided.database !== 'object' || Array.isArray(provided.database))
+  ) {
+    fail('`database` must be an object with an `engine` and optional `name`')
+  }
 
-  return validate({ ...DEFAULTS, ...provided, configPath })
+  return validate({
+    ...DEFAULTS,
+    ...provided,
+    database: { ...DEFAULTS.database, ...provided.database },
+    configPath
+  })
 }

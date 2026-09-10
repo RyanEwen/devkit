@@ -11,7 +11,16 @@
  * bin, so `npx devkit doctor` works in any of them. `bootstrap` additionally links it onto PATH so
  * a directory that is not a project (or is not Node at all) can still drive the machine's stack.
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +31,7 @@ import {
   dropDatabase,
   ensureCheckoutDatabase,
   findOrphanDatabases,
+  resolveDatabaseIdentity,
   snapshotBaseline
 } from '../src/database.mjs'
 import { baselineArchivePath, captureDataBaseline, restoreDataBaseline } from '../src/data-baseline.mjs'
@@ -76,15 +86,19 @@ function bootstrap() {
     mkdirSync(dir, { recursive: true })
   }
 
-  // Copied OUT of the package rather than run from inside node_modules: the stack is shared by
-  // every project on the machine, so it must not stop working when one project is deleted or its
-  // dependencies are reinstalled. Never overwritten, so local edits to the proxy config survive.
-  if (existsSync(infraDir)) {
-    console.log(`  + infra stack already installed at ${infraDir} (left as-is)`)
-  } else {
-    cpSync(path.join(packageDir, 'infra'), infraDir, { recursive: true })
-    console.log(`  + infra stack installed to ${infraDir}`)
+  // Copied OUT of node_modules because the stack is machine-wide. These two files are managed by
+  // devkit and refreshed on bootstrap so an existing install gains new services. A changed file is
+  // retained as `.previous` before replacement; unrelated files in the directory are untouched.
+  mkdirSync(infraDir, { recursive: true })
+  for (const filename of ['compose.yml', 'traefik.yml']) {
+    const source = path.join(packageDir, 'infra', filename)
+    const target = path.join(infraDir, filename)
+    if (existsSync(target) && readFileSync(target, 'utf8') !== readFileSync(source, 'utf8')) {
+      copyFileSync(target, `${target}.previous`)
+    }
+    copyFileSync(source, target)
   }
+  console.log(`  + managed infra refreshed at ${infraDir}`)
 
   const config = {
     configDir,
@@ -94,6 +108,13 @@ function bootstrap() {
     baselineDir: path.join(configDir, 'baselines'),
     proxyPort: 80,
     postgres: { host: '127.0.0.1', port: 5432, user: 'postgres', password: 'postgres' },
+    mariadb: {
+      host: '127.0.0.1',
+      port: 3307,
+      user: 'root',
+      password: 'root',
+      volume: 'devkit-mariadb'
+    },
     baselineMaxAgeDays: 14
   }
 
@@ -106,7 +127,7 @@ function bootstrap() {
       `Inspect it with: docker compose -p ${config.infraProject} -f ${path.join(infraDir, 'compose.yml')} logs`
     )
   }
-  console.log('  + proxy and postgres running')
+  console.log('  + proxy, postgres, and mariadb running')
 
   linkOntoPath('devkit')
   linkOntoPath('devproxy')
@@ -152,14 +173,15 @@ function linkOntoPath(name) {
 }
 
 async function snapshot(config) {
-  const identity = checkoutIdentity(repoRoot)
-  if (!identity) fail(`${repoRoot} is not a git checkout`)
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) fail(`${repoRoot} is not a git checkout`)
   const project = await loadProjectConfig(repoRoot)
+  const identity = resolveDatabaseIdentity(checkout, project)
 
   if (!identity.isPrimary) {
     console.log(`Note: capturing from worktree "${identity.worktreeName}" rather than the primary checkout.`)
   }
-  const result = snapshotBaseline(config, identity)
+  const result = snapshotBaseline(config, identity, project)
   if (!result.ok) fail(`database snapshot failed: ${result.error}`)
   console.log(`  + ${result.baseline} captured from ${result.source} (previous kept as ${result.previous})`)
 
@@ -173,9 +195,11 @@ async function snapshot(config) {
   console.log('\nNew checkouts will clone from this. Existing ones are untouched.')
 }
 
-function reset(config, args) {
-  const identity = checkoutIdentity(repoRoot)
-  if (!identity) fail(`${repoRoot} is not a git checkout`)
+async function reset(config, args) {
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) fail(`${repoRoot} is not a git checkout`)
+  const project = await loadProjectConfig(repoRoot)
+  const identity = resolveDatabaseIdentity(checkout, project)
   if (identity.isPrimary) {
     fail(
       'refusing to reset the primary checkout',
@@ -183,13 +207,13 @@ function reset(config, args) {
     )
   }
 
-  const dropped = dropDatabase(config, identity.databaseName)
+  const dropped = dropDatabase(config, identity.databaseName, project)
   if (!dropped.ok) fail(`could not drop ${identity.databaseName}: ${dropped.error}`)
 
   if (args.includes('--empty')) {
     return console.log(`  + ${identity.databaseName} dropped; the next dev start builds it from migrations`)
   }
-  const created = ensureCheckoutDatabase(config, identity)
+  const created = ensureCheckoutDatabase(config, identity, project)
   if (created.error) fail(created.error)
   console.log(`  + ${identity.databaseName} re-created from ${created.sourced}`)
   const restored = restoreDataBaseline(config, identity, repoRoot)
@@ -202,11 +226,13 @@ function reset(config, args) {
  * Never reads a registry, because there isn't one: names are derived from paths, so "which
  * checkouts exist" is answered by `git worktree list` and nothing can drift out of sync with it.
  */
-function prune(config, args) {
-  const identity = checkoutIdentity(repoRoot)
-  if (!identity) fail(`${repoRoot} is not a git checkout`)
+async function prune(config, args) {
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) fail(`${repoRoot} is not a git checkout`)
+  const project = await loadProjectConfig(repoRoot)
+  const identity = resolveDatabaseIdentity(checkout, project)
 
-  const orphans = findOrphanDatabases(config, identity, liveDatabaseNames())
+  const orphans = findOrphanDatabases(config, identity, liveDatabaseNames(project), project)
   if (orphans.length === 0) return console.log('Nothing to prune: every worktree database has a matching worktree.')
 
   if (!args.includes('--yes')) {
@@ -215,13 +241,13 @@ function prune(config, args) {
     return console.log('\nRe-run with --yes to actually drop them.')
   }
   for (const name of orphans) {
-    const dropped = dropDatabase(config, name)
+    const dropped = dropDatabase(config, name, project)
     console.log(dropped.ok ? `  + dropped ${name}` : `  ! ${name}: ${dropped.error}`)
   }
 }
 
 /** Every checkout of this clone that still exists, re-derived rather than read from a registry. */
-function liveDatabaseNames() {
+function liveDatabaseNames(project) {
   const output = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repoRoot, encoding: 'utf8' })
   return output
     .split('\n')
@@ -229,7 +255,7 @@ function liveDatabaseNames() {
     .map((line) => line.slice('worktree '.length).trim())
     .map((dir) => readGitCheckout(dir))
     .filter(Boolean)
-    .map((checkout) => deriveCheckoutIdentity(checkout).databaseName)
+    .map((checkout) => resolveDatabaseIdentity(deriveCheckoutIdentity(checkout), project).databaseName)
 }
 
 function infra(config) {
@@ -238,7 +264,7 @@ function infra(config) {
     env: infraComposeEnv(config)
   })
   if (!started) fail('the shared stack could not be started', `docker compose -p ${config.infraProject} logs`)
-  console.log('  + proxy and postgres running')
+  console.log('  + proxy, postgres, and mariadb running')
 }
 
 const [command, ...args] = process.argv.slice(2)
@@ -254,10 +280,10 @@ switch (command) {
     await snapshot(requireConfig())
     break
   case 'reset':
-    reset(requireConfig(), args)
+    await reset(requireConfig(), args)
     break
   case 'prune':
-    prune(requireConfig(), args)
+    await prune(requireConfig(), args)
     break
   case 'infra':
     infra(requireConfig())
@@ -266,7 +292,7 @@ switch (command) {
     console.log(`devkit gives every checkout and worktree on this machine its own *.localhost
 hostname, its own database and its own ports, all derived from its path.
 
-  devkit bootstrap    once per machine: install and start the shared proxy + Postgres
+  devkit bootstrap    once per machine: install or upgrade the shared proxy + databases
   devkit doctor       the state of every precondition, and the command that fixes each
   devkit snapshot     capture this checkout's dev data as the baseline new ones clone
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)

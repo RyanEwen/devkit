@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { devkitConfig } from '../src/config.mjs'
+import { checkoutConnectionUrl, checkoutDatabase, devkitConfig } from '../src/config.mjs'
 
 /**
  * These pin the OFF switches rather than the settings, because the promise that matters is the one
@@ -88,6 +88,13 @@ test('on with a marker present, defaulting every path under the config directory
       assert.equal(config.infraProject, 'devkit-infra')
       assert.equal(config.proxyPort, 80)
       assert.equal(config.postgres.port, 5432)
+      assert.deepEqual(config.mariadb, {
+        host: '127.0.0.1',
+        port: 3307,
+        user: 'root',
+        password: 'root',
+        volume: 'devkit-mariadb'
+      })
       assert.equal(config.routesDir, path.join(dir, 'devkit', 'routes'))
       assert.equal(config.infraDir, path.join(dir, 'devkit', 'infra'))
     },
@@ -101,8 +108,41 @@ test('marker values override the defaults', () => {
       const config = devkitConfig({ containerCheck: notInContainer })
       assert.equal(config.proxyPort, 8080)
       assert.equal(config.postgres.port, 5555)
+      assert.equal(config.mariadb.port, 3337)
       assert.equal(config.baselineMaxAgeDays, 3)
     },
-    { marker: JSON.stringify({ enabled: true, proxyPort: 8080, postgres: { port: 5555 }, baselineMaxAgeDays: 3 }) }
+    {
+      marker: JSON.stringify({
+        enabled: true,
+        proxyPort: 8080,
+        postgres: { port: 5555 },
+        mariadb: { port: 3337 },
+        baselineMaxAgeDays: 3
+      })
+    }
   )
+})
+
+test('connection URLs use the selected backend and encode credentials', () => {
+  const config = {
+    postgres: { host: '127.0.0.1', port: 5432, user: 'post user', password: 'p@ss' },
+    mariadb: { host: '127.0.0.1', port: 3307, user: 'root', password: 'm@ria' }
+  }
+  assert.equal(
+    checkoutConnectionUrl(config, 'printstream'),
+    'postgresql://post%20user:p%40ss@127.0.0.1:5432/printstream?schema=public'
+  )
+  assert.equal(
+    checkoutConnectionUrl(config, 'wyliebiz_app', 'mariadb'),
+    'mysql://root:m%40ria@127.0.0.1:3307/wyliebiz_app'
+  )
+  assert.deepEqual(checkoutDatabase(config, 'wyliebiz_app', 'mariadb'), {
+    engine: 'mariadb',
+    name: 'wyliebiz_app',
+    host: '127.0.0.1',
+    port: 3307,
+    user: 'root',
+    password: 'm@ria',
+    url: 'mysql://root:m%40ria@127.0.0.1:3307/wyliebiz_app'
+  })
 })

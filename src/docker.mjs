@@ -1,12 +1,10 @@
 /**
  * Docker access for multi-checkout dev mode: probing the daemon, bringing the shared infra stack
- * up, and running commands inside the shared Postgres container.
+ * up, and running commands inside the selected database container.
  *
- * One deliberate decision shapes everything here: **every psql/pg_dump call runs INSIDE the
- * Postgres container**, never on the host. The point of this mode is to avoid installing service
- * packages on the machine, and requiring `postgresql-client` on the host to create a database would
- * concede exactly that. It also removes a whole class of version-skew bug, since the client and
- * server are then always the same build.
+ * One deliberate decision shapes everything here: every database client and dump command runs
+ * inside its matching container, never on the host. This avoids host packages and client/server
+ * version skew.
  *
  * Nothing here is imported unless `devkitConfig()` returned non-null, so a contributor without
  * any of this infrastructure never reaches a Docker call. See `config.mjs`.
@@ -15,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 
 /** Postgres service name inside the infra Compose project. */
 export const POSTGRES_SERVICE = 'postgres'
+export const MARIADB_SERVICE = 'mariadb'
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', ...options })
@@ -69,7 +68,12 @@ export function infraComposeEnv(config) {
     DEVKIT_PROXY_PORT: String(config.proxyPort),
     DEVKIT_POSTGRES_PORT: String(config.postgres.port),
     DEVKIT_POSTGRES_USER: config.postgres.user,
-    DEVKIT_POSTGRES_PASSWORD: config.postgres.password
+    DEVKIT_POSTGRES_PASSWORD: config.postgres.password,
+    DEVKIT_MARIADB_PORT: String(config.mariadb.port),
+    DEVKIT_MARIADB_USER: config.mariadb.user,
+    DEVKIT_MARIADB_PASSWORD: config.mariadb.password,
+    DEVKIT_MARIADB_VOLUME: config.mariadb.volume ?? 'devkit-mariadb',
+    DEVKIT_BASELINE_DIR: config.baselineDir
   }
 }
 
@@ -114,6 +118,30 @@ export function postgresExec(config, script, { input } = {}) {
 export function postgresSql(config, sql, { database = 'postgres' } = {}) {
   const user = config.postgres.user
   return postgresExec(config, `psql -v ON_ERROR_STOP=1 -U ${user} -d ${database} -tAc ${shellQuote(sql)}`)
+}
+
+/** Runs a command inside the shared MariaDB container without exposing its password in argv. */
+export function mariadbExec(config, script, { input } = {}) {
+  const containerId = composeContainerId(config.infraProject, MARIADB_SERVICE)
+  if (!containerId) return { ok: false, stderr: 'the shared MariaDB container is not running' }
+
+  const result = run(
+    'docker',
+    ['exec', '-i', '-e', 'MYSQL_PWD', containerId, 'sh', '-c', script],
+    { input, env: { ...process.env, MYSQL_PWD: config.mariadb.password } }
+  )
+  return {
+    ok: result.status === 0,
+    stdout: (result.stdout ?? '').trim(),
+    stderr: (result.stderr ?? '').trim()
+  }
+}
+
+/** Runs one MariaDB statement and returns its unheaded, tab-separated output. */
+export function mariadbSql(config, sql, { database } = {}) {
+  const user = shellQuote(config.mariadb.user)
+  const selected = database ? ` ${shellQuote(database)}` : ''
+  return mariadbExec(config, `mariadb --batch --skip-column-names -u ${user}${selected} -e ${shellQuote(sql)}`)
 }
 
 export function shellQuote(value) {

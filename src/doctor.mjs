@@ -11,11 +11,19 @@
  */
 import { existsSync } from 'node:fs'
 
-import { baselineDatabaseName, checkoutIdentity, checkoutPorts } from './checkout-identity.mjs'
-import { devkitConfig, devkitMarkerPath } from './config.mjs'
-import { appliedMigrationCount, databaseExists, listCheckoutDatabases } from './database.mjs'
+import { checkoutIdentity, checkoutPorts } from './checkout-identity.mjs'
+import { checkoutDatabase, devkitConfig, devkitMarkerPath } from './config.mjs'
+import {
+  appliedMigrationCount,
+  databaseBaselineAgeDays,
+  databaseBaselineExists,
+  databaseBaselineLabel,
+  databaseExists,
+  listCheckoutDatabases,
+  resolveDatabaseIdentity
+} from './database.mjs'
 import { baselineAgeDays, baselineArchivePath, checkoutNeedsData } from './data-baseline.mjs'
-import { composeContainers, postgresSql, probeDocker } from './docker.mjs'
+import { composeContainers, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { routeFilePath } from './proxy.mjs'
 
@@ -47,12 +55,13 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     return 0
   }
 
-  const identity = checkoutIdentity(repoRoot)
-  if (!identity) {
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) {
     report(BAD, 'checkout', `${repoRoot} is not a git checkout`)
     return 1
   }
   const project = await loadProjectConfig(repoRoot)
+  const identity = resolveDatabaseIdentity(checkout, project)
   const ports = checkoutPorts(identity, project.ports)
 
   log('\ndevkit: ON\n')
@@ -69,19 +78,28 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   report(OK, 'docker', `daemon ${docker.version}`)
 
   const running = composeContainers(config.infraProject)
-  for (const service of ['proxy', 'postgres']) {
+  const databaseService = project.database.engine === 'mariadb' ? 'mariadb' : 'postgres'
+  for (const service of ['proxy', databaseService]) {
     if (running.includes(service)) report(OK, service, `running in project ${config.infraProject}`)
     else report(BAD, service, 'not running', 'devkit infra')
   }
-  if (!running.includes('postgres')) return 1
+  if (!running.includes(databaseService)) return 1
 
-  if (!postgresSql(config, 'select 1').ok) {
-    report(BAD, 'postgres', 'container is up but not accepting queries', `docker compose -p ${config.infraProject} logs postgres`)
+  const ready = project.database.engine === 'mariadb'
+    ? mariadbSql(config, 'select 1').ok
+    : postgresSql(config, 'select 1').ok
+  if (!ready) {
+    report(
+      BAD,
+      databaseService,
+      'container is up but not accepting queries',
+      `docker compose -p ${config.infraProject} logs ${databaseService}`
+    )
     return 1
   }
 
-  if (databaseExists(config, identity.databaseName)) {
-    const applied = appliedMigrationCount(config, identity.databaseName, project.migrationsTable)
+  if (databaseExists(config, identity.databaseName, project)) {
+    const applied = appliedMigrationCount(config, identity.databaseName, project.migrationsTable, project)
     report(OK, 'database', applied === null
       ? identity.databaseName
       : `${identity.databaseName}, ${applied} migration(s) applied`)
@@ -89,10 +107,12 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     report(WARN, 'database', `${identity.databaseName} does not exist yet`, 'the next dev start creates it')
   }
 
-  const baseline = baselineDatabaseName(identity)
-  const age = baselineAgeDays(config, identity)
-  if (!databaseExists(config, baseline)) {
-    report(WARN, 'baseline', 'no baseline database yet', 'devkit snapshot (from the primary checkout)')
+  const baseline = databaseBaselineLabel(config, identity, project)
+  const age = project.baselinePaths.length > 0
+    ? baselineAgeDays(config, identity)
+    : databaseBaselineAgeDays(config, identity, project)
+  if (!databaseBaselineExists(config, identity, project)) {
+    report(WARN, 'baseline', 'no baseline yet', 'devkit snapshot (from the primary checkout)')
   } else if (project.baselinePaths.length === 0) {
     report(OK, 'baseline', `${baseline} (database only; this project seeds no files)`)
   } else if (age === null) {
@@ -114,7 +134,15 @@ export async function runDoctor({ repoRoot, log = console.log }) {
 
   // Project checks last: they are the specific ones, and they read better after the general state
   // they depend on has been established.
-  const context = { identity, ports, config, url: `http://${identity.hostname}`, repoRoot }
+  const database = checkoutDatabase(config, identity.databaseName, project.database.engine)
+  const context = {
+    identity,
+    ports,
+    config,
+    database,
+    url: `http://${identity.hostname}`,
+    repoRoot
+  }
   for (const check of project.checks ?? []) {
     try {
       const result = await check(context)
@@ -124,7 +152,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     }
   }
 
-  const siblings = listCheckoutDatabases(config, identity)
+  const siblings = listCheckoutDatabases(config, identity, project)
   if (siblings.length) log(`\n  ${siblings.length} worktree database(s): ${siblings.join(', ')}`)
 
   log(problems ? '\nOne or more preconditions need attention.\n' : '\nAll preconditions healthy.\n')

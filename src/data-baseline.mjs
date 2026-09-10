@@ -87,7 +87,7 @@ export function restoreDataBaseline(config, identity, repoRoot) {
  * Age of the captured pair in days, or null when nothing has been captured.
  *
  * Dating the pair off the ARCHIVE rather than the database is deliberate: they are captured
- * together, and a file mtime survives a Postgres restart, a volume restore and a server upgrade,
+ * together, and a file mtime survives a database restart, a volume restore and a server upgrade,
  * none of which say anything about how current the data is.
  */
 export function baselineAgeDays(config, identity, { now = Date.now() } = {}) {

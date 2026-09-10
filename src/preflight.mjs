@@ -7,7 +7,7 @@
  * Docker) stops the run naming the exact command that fixes it, rather than letting a project's
  * watchers start against infrastructure that is not there.
  *
- * Returns `null` before touching Docker, Postgres or the filesystem when devkit is off. See
+ * Returns `null` before touching Docker, a database, or the filesystem when devkit is off. See
  * `config.mjs` for why that is a hard guarantee rather than best-effort.
  *
  * Counterparts: `infra/compose.yml` (what `ensureInfra` starts) and each project's
@@ -16,11 +16,18 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { baselineDatabaseName, checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
-import { checkoutConnectionUrl, devkitConfig } from './config.mjs'
-import { appliedMigrationCount, ensureCheckoutDatabase, snapshotBaseline } from './database.mjs'
+import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
+import { checkoutDatabase, devkitConfig } from './config.mjs'
+import {
+  appliedMigrationCount,
+  databaseBaselineAgeDays,
+  databaseBaselineLabel,
+  ensureCheckoutDatabase,
+  resolveDatabaseIdentity,
+  snapshotBaseline
+} from './database.mjs'
 import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
-import { composeUp, infraComposeEnv, postgresSql, probeDocker } from './docker.mjs'
+import { composeUp, infraComposeEnv, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { writeRoute } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
@@ -43,10 +50,11 @@ export async function preflight({ repoRoot, log = console.log }) {
   const config = devkitConfig()
   if (!config) return null
 
-  const identity = checkoutIdentity(repoRoot)
-  if (!identity) return null
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) return null
 
   const project = await loadProjectConfig(repoRoot)
+  const identity = resolveDatabaseIdentity(checkout, project)
   const ports = checkoutPorts(identity, project.ports)
   const lines = []
 
@@ -59,18 +67,18 @@ export async function preflight({ repoRoot, log = console.log }) {
   const docker = probeDocker()
   if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
 
-  ensureInfra(config, log)
-  waitForPostgres(config)
+  ensureInfra(config, project, log)
+  waitForDatabase(config, project)
 
-  const database = ensureCheckoutDatabase(config, identity)
-  if (database.error) throw new PreflightError(`could not create database ${database.name}: ${database.error}`)
-  if (database.created) {
+  const provisioned = ensureCheckoutDatabase(config, identity, project)
+  if (provisioned.error) throw new PreflightError(`could not create database ${provisioned.name}: ${provisioned.error}`)
+  if (provisioned.created) {
     lines.push(
-      database.sourced === 'baseline'
-        ? `database ${database.name} cloned from ${baselineDatabaseName(identity)}`
-        : `database ${database.name} created EMPTY (no baseline yet -- run \`devkit snapshot\` from the primary checkout)`
+      provisioned.sourced === 'baseline'
+        ? `database ${provisioned.name} cloned from ${provisioned.baseline ?? databaseBaselineLabel(config, identity, project)}`
+        : `database ${provisioned.name} created EMPTY (no baseline yet -- run \`devkit snapshot\` from the primary checkout)`
     )
-    if (database.warning) lines.push(`baseline clone failed, fell back to empty: ${database.warning}`)
+    if (provisioned.warning) lines.push(`baseline clone failed, fell back to empty: ${provisioned.warning}`)
   }
 
   // Only when the project actually seeds files: a project with no `baselinePaths` has nothing on
@@ -83,18 +91,24 @@ export async function preflight({ repoRoot, log = console.log }) {
 
   writeRoute(config, identity, ports.web)
 
-  const age = baselineAgeDays(config, identity)
+  const age = project.baselinePaths.length > 0
+    ? baselineAgeDays(config, identity)
+    : databaseBaselineAgeDays(config, identity, project)
   if (age !== null && age > config.baselineMaxAgeDays) {
     lines.push(`baseline is ${Math.floor(age)} days old -- \`devkit snapshot\` refreshes it`)
   }
 
   const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
+  const engine = project.database.engine
+  const database = checkoutDatabase(config, identity.databaseName, engine)
+  const databaseUrl = database.url
   const context = {
     identity,
     ports,
     url,
     directUrl: `http://localhost:${ports.web}`,
-    databaseUrl: checkoutConnectionUrl(config, identity.databaseName),
+    database,
+    databaseUrl,
     configDir: config.configDir
   }
 
@@ -104,7 +118,7 @@ export async function preflight({ repoRoot, log = console.log }) {
     project,
     lines,
     /** Applied-migration count before the project migrates, so a caller can detect a schema move. */
-    migrationsBefore: appliedMigrationCount(config, identity.databaseName, project.migrationsTable),
+    migrationsBefore: appliedMigrationCount(config, identity.databaseName, project.migrationsTable, project),
     env: { ...baseEnv(context), ...project.env(context) }
   }
 }
@@ -135,12 +149,13 @@ function baseEnv({ identity, ports, url, databaseUrl }) {
 }
 
 /** Brings the shared stack up. Idempotent, so this runs on every start without costing anything. */
-function ensureInfra(config, log) {
+function ensureInfra(config, project, log) {
   const composeFile = path.join(config.infraDir, 'compose.yml')
   mkdirSync(config.routesDir, { recursive: true })
   const started = composeUp(config.infraProject, [composeFile], {
     cwd: config.infraDir,
-    env: infraComposeEnv(config)
+    env: infraComposeEnv(config),
+    services: ['proxy', project.database.engine === 'mariadb' ? 'mariadb' : 'postgres']
   })
   if (!started) {
     throw new PreflightError(
@@ -151,15 +166,16 @@ function ensureInfra(config, log) {
   log?.('[devkit] shared infrastructure ready')
 }
 
-/** Postgres accepts TCP before it accepts queries; poll until a trivial query succeeds. */
-function waitForPostgres(config, { attempts = 30, delayMs = 500 } = {}) {
+/** A container accepts TCP before it accepts queries; poll until a trivial query succeeds. */
+function waitForDatabase(config, project, { attempts = 30, delayMs = 500 } = {}) {
+  const engine = project.database.engine
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (postgresSql(config, 'select 1').ok) return
+    if ((engine === 'mariadb' ? mariadbSql(config, 'select 1') : postgresSql(config, 'select 1')).ok) return
     sleepSync(delayMs)
   }
   throw new PreflightError(
-    'the shared Postgres did not become ready',
-    `check \`docker compose -p ${config.infraProject} logs postgres\``
+    `the shared ${engine === 'mariadb' ? 'MariaDB' : 'Postgres'} did not become ready`,
+    `check \`docker compose -p ${config.infraProject} logs ${engine}\``
   )
 }
 
@@ -185,10 +201,15 @@ function formatBytes(bytes) {
  */
 export function refreshBaselineAfterMigrations(state, { log = console.log } = {}) {
   if (!state?.identity.isPrimary) return
-  const after = appliedMigrationCount(state.config, state.identity.databaseName, state.project.migrationsTable)
+  const after = appliedMigrationCount(
+    state.config,
+    state.identity.databaseName,
+    state.project.migrationsTable,
+    state.project
+  )
   if (after === null || state.migrationsBefore === null || after <= state.migrationsBefore) return
 
-  const snapshot = snapshotBaseline(state.config, state.identity)
+  const snapshot = snapshotBaseline(state.config, state.identity, state.project)
   if (!snapshot.ok) {
     log(`[devkit] baseline refresh skipped: ${snapshot.error}`)
     return

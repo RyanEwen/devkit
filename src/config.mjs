@@ -77,7 +77,7 @@ export function devkitConfig({ warn = console.warn, containerCheck = inContainer
   return {
     markerPath,
     configDir,
-    /** One shared Compose project for the proxy + Postgres every checkout uses. */
+    /** One shared Compose project for the proxy and supported database services. */
     infraProject: marker.infraProject ?? 'devkit-infra',
     /** Where the infra stack was installed. Shared across projects, so it lives outside any repo. */
     infraDir: expandHome(marker.infraDir ?? path.join(configDir, 'infra')),
@@ -92,6 +92,13 @@ export function devkitConfig({ warn = console.warn, containerCheck = inContainer
       user: marker.postgres?.user ?? 'postgres',
       password: marker.postgres?.password ?? 'postgres'
     },
+    mariadb: {
+      host: marker.mariadb?.host ?? '127.0.0.1',
+      port: marker.mariadb?.port ?? 3307,
+      user: marker.mariadb?.user ?? 'root',
+      password: marker.mariadb?.password ?? 'root',
+      volume: marker.mariadb?.volume ?? 'devkit-mariadb'
+    },
     /** Refresh nag threshold for the `data/` + database baseline. */
     baselineMaxAgeDays: marker.baselineMaxAgeDays ?? 14
   }
@@ -105,10 +112,27 @@ function expandHome(value) {
  * Connection string for one checkout's own database.
  *
  * There is deliberately no admin/maintenance equivalent here: every CREATE/DROP runs inside the
- * Postgres container via `docker.mjs`, so nothing on the host needs a superuser URL (or a
- * `postgresql-client` install to use one).
+ * selected database container via `docker.mjs`, so nothing on the host needs a database client.
  */
-export function checkoutConnectionUrl(config, databaseName) {
-  const { user, password, host, port } = config.postgres
-  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${databaseName}?schema=public`
+export function checkoutConnectionUrl(config, databaseName, engine = 'postgres') {
+  const settings = config[engine]
+  const credentials = `${encodeURIComponent(settings.user)}:${encodeURIComponent(settings.password)}`
+  const origin = `${settings.host}:${settings.port}/${databaseName}`
+  return engine === 'mariadb'
+    ? `mysql://${credentials}@${origin}`
+    : `postgresql://${credentials}@${origin}?schema=public`
+}
+
+/** Complete checkout database descriptor passed to project env functions and doctor checks. */
+export function checkoutDatabase(config, databaseName, engine = 'postgres') {
+  const { host, port, user, password } = config[engine]
+  return {
+    engine,
+    name: databaseName,
+    host,
+    port,
+    user,
+    password,
+    url: checkoutConnectionUrl(config, databaseName, engine)
+  }
 }

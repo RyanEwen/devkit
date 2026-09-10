@@ -16,6 +16,7 @@ function withConfig(source) {
 test('a project with no config gets defaults rather than an error', async () => {
   const config = await withConfig(null)
   assert.deepEqual(config.ports, ['web', 'api'])
+  assert.deepEqual(config.database, { engine: 'postgres', name: null })
   assert.deepEqual(config.baselinePaths, [])
   assert.deepEqual(config.worktreeFiles, [])
   assert.equal(config.configPath, null)
@@ -33,6 +34,13 @@ test('a config overrides only what it names', async () => {
   assert.deepEqual(config.baselinePaths, [])
   assert.deepEqual(config.worktreeFiles, [])
   assert.equal(typeof config.env, 'function')
+})
+
+test('a project can select MariaDB and preserve its established primary database name', async () => {
+  const config = await withConfig(`export default {
+    database: { engine: 'mariadb', name: 'wyliebiz_app' }
+  }`)
+  assert.deepEqual(config.database, { engine: 'mariadb', name: 'wyliebiz_app' })
 })
 
 test('env receives the derived context and returns the project\'s own variables', async () => {
@@ -55,6 +63,9 @@ test('a malformed config is rejected with a message naming the field', async () 
   await assert.rejects(withConfig('export default { env: 42 }'), /`env` must be a function/)
   await assert.rejects(withConfig('export default { checks: [1] }'), /`checks` must be an array of functions/)
   await assert.rejects(withConfig('export default { worktreeFiles: ".env" }'), /`worktreeFiles` must be an array/)
+  await assert.rejects(withConfig('export default { database: "mariadb" }'), /`database` must be an object/)
+  await assert.rejects(withConfig('export default { database: { engine: "sqlite" } }'), /`database.engine`/)
+  await assert.rejects(withConfig('export default { database: { name: "bad-name" } }'), /`database.name`/)
   await assert.rejects(withConfig('export default 42'), /must `export default` an object/)
 })
 

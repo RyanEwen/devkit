@@ -19,7 +19,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 
-/** Postgres truncates identifiers over this many bytes, silently colliding names that share a prefix. */
+/** Postgres limits names to 63 bytes; staying inside it also fits MariaDB's 64-character limit. */
 const POSTGRES_IDENTIFIER_LIMIT = 63
 
 /** A DNS label may not exceed this, and Traefik rejects a router rule containing an invalid host. */
@@ -40,7 +40,7 @@ export function sanitizeLabel(value) {
 }
 
 /**
- * Builds a Postgres identifier that is unique for `name` and never exceeds the server's limit.
+ * Builds a database identifier that is unique for `name` and fits every supported server.
  *
  * Truncation alone is not safe here: `myrepo_wt_` plus two long branch names can agree for the
  * first 63 characters and silently become ONE database. When the full name would overflow, the tail
@@ -114,7 +114,7 @@ export function checkoutIdentity(root = process.cwd()) {
 
 /** The baseline template every new checkout's database is cloned from. One per clone. */
 export function baselineDatabaseName(identity) {
-  return postgresIdentifier(`${identity.repoName}_`, 'baseline')
+  return postgresIdentifier(`${identity.databaseBaseName ?? identity.repoName}_`, 'baseline')
 }
 
 /** Block of 10 consecutive ports, so a checkout can grow a service without re-deriving. */

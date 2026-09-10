@@ -21,7 +21,8 @@ One shared stack for the whole machine, installed outside every repo at `~/.conf
 | Piece | Purpose |
 | --- | --- |
 | Traefik on `127.0.0.1:80` | routes each `*.localhost` hostname to that checkout's dev server |
-| One Postgres on `127.0.0.1:5432` | one database per checkout, cloned from a per-project baseline |
+| One Postgres on `127.0.0.1:5432` | isolated databases for PostgreSQL projects |
+| One MariaDB on `127.0.0.1:3307` | isolated databases for MariaDB/MySQL projects |
 | `~/.config/devkit/routes` | one generated route file per running checkout, hot-reloaded |
 | `~/.config/devkit/baselines` | the database + seed-data baseline a new worktree starts from |
 
@@ -35,8 +36,10 @@ npm install --save-dev github:RyanEwen/devkit
 npx devkit bootstrap        # once per machine
 ```
 
-`bootstrap` installs and starts the shared stack, writes the marker that switches devkit on, and
-links `devkit` and `devproxy` onto your PATH.
+`bootstrap` installs or upgrades the managed shared-stack files, starts the services, writes the
+marker that switches devkit on, and links `devkit` and `devproxy` onto your PATH. Re-run it after a
+Devkit upgrade that adds infrastructure. A changed managed file is retained beside the replacement
+with a `.previous` suffix.
 
 ## Off unless you turn it on
 
@@ -55,12 +58,19 @@ Add a `devkit.config.mjs` naming the few things devkit cannot derive:
 ```js
 export default {
   ports: ['web', 'api'],                 // named offsets in this checkout's port block, in order
+  database: {                            // omitted means Postgres with a path-derived name
+    engine: 'mariadb',
+    name: 'my_existing_dev_database'     // optional primary name; worktrees stay derived
+  },
   migrationsTable: '_prisma_migrations', // null if the project has no migrations
   baselinePaths: ['data/uploads'],       // repo-relative files a new worktree should start with
   worktreeFiles: ['.env'],               // ignored local config inherited when absent
-  env: ({ ports, url, identity }) => ({  // whatever YOUR dev servers read
+  env: ({ ports, url, identity, database }) => ({ // whatever YOUR dev servers read
     API_PORT: String(ports.api),
     CLIENT_ORIGIN: url,
+    DB_HOST: database.host,
+    DB_PORT: String(database.port),
+    DB_NAME: database.name,
     VITE_API_PORT: String(ports.api)
   })
 }
@@ -78,11 +88,13 @@ const devkit = await preflight({ repoRoot })
 if (devkit) Object.assign(process.env, devkit.env)   // null when devkit is off
 ```
 
-`preflight()` brings the shared stack up, creates or clones this checkout's database, restores its
-seed data, inherits missing `worktreeFiles` from the primary checkout, registers its proxy route,
-and returns the environment plus the URLs it resolved to. It never overwrites a worktree file.
+`preflight()` brings the selected database service and proxy up, creates or clones this checkout's
+database, restores its seed data, inherits missing `worktreeFiles` from the primary checkout,
+registers its proxy route, and returns the environment plus the URLs it resolved to. It never
+overwrites a worktree file.
 
-devkit itself publishes only what it alone can know: `DATABASE_URL`, `DEVKIT_URL`,
+The returned context includes `database: { engine, name, host, port, user, password, url }`. Devkit
+itself publishes only what it alone can know: `DATABASE_URL`, `DEVKIT_URL`,
 `DEVKIT_HOSTNAME`, and the two Vite settings the **proxy** requires (`VITE_DEV_HOST` and
 `VITE_DEV_ALLOWED_HOSTS`). Everything else is your `env()` to name, because only your project knows
 which variables its servers read.
@@ -100,6 +112,12 @@ which variables its servers read.
 
 `devkit reset` deliberately refuses on the primary checkout: that database is the real dev data a
 baseline is captured *from*, not a disposable copy.
+
+PostgreSQL baselines are template databases. MariaDB baselines are atomically rotated SQL dump
+files under `~/.config/devkit/baselines`; imports preserve schema, data, triggers, routines, and
+events. The dump uses a consistent transaction, so projects should use transactional tables when a
+snapshot must represent one instant. Existing devcontainer or remote MariaDB data is not imported
+automatically: load it into the primary Devkit database once, then run `devkit snapshot`.
 
 ## Two rules worth knowing
 
