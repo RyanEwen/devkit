@@ -278,7 +278,9 @@ export function databaseBaselineLabel(config, identity, project) {
 }
 
 function mariadbBaselinePath(config, identity) {
-  return path.join(config.baselineDir, `${identity.repoName}-mariadb.sql`)
+  const profile = config.databaseProfile
+  const label = profile && !profile.isDefault ? profile.key : 'mariadb'
+  return path.join(config.baselineDir, `${identity.repoName}-${label}.sql`)
 }
 
 function containerBaselinePath(hostPath) {
@@ -289,7 +291,7 @@ function dumpMariaDatabase(config, name, destination) {
   const user = shellQuote(config.mariadb.user)
   return mariadbExec(
     config,
-    `mariadb-dump --single-transaction --routines --events --triggers --hex-blob --result-file=${shellQuote(containerBaselinePath(destination))} -u ${user} ${shellQuote(name)}`
+    `dump=$(command -v mariadb-dump || command -v mysqldump) && "$dump" --single-transaction --routines --events --triggers --hex-blob --result-file=${shellQuote(containerBaselinePath(destination))} -u ${user} ${shellQuote(name)}`
   )
 }
 
@@ -297,7 +299,7 @@ function importMariaDump(config, name, source) {
   const user = shellQuote(config.mariadb.user)
   return mariadbExec(
     config,
-    `mariadb -u ${user} ${shellQuote(name)} < ${shellQuote(containerBaselinePath(source))}`
+    `client=$(command -v mariadb || command -v mysql) && "$client" -u ${user} ${shellQuote(name)} < ${shellQuote(containerBaselinePath(source))}`
   )
 }
 

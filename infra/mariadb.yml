@@ -1,0 +1,30 @@
+# One non-default MariaDB version profile. Baselines are mounted because dump/restore clients run
+# inside the selected version's own container, avoiding client/server version skew.
+services:
+  database:
+    image: ${DEVKIT_DATABASE_IMAGE:?exact MariaDB image is required}
+    restart: always
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --sql-mode=NO_ENGINE_SUBSTITUTION
+      - --max-allowed-packet=64M
+      - --default-time-zone=America/New_York
+    ports:
+      - "127.0.0.1:${DEVKIT_DATABASE_PORT:?database port is required}:3306"
+    environment:
+      TZ: America/New_York
+      MARIADB_ROOT_PASSWORD: ${DEVKIT_DATABASE_PASSWORD:?database password is required}
+      MYSQL_ROOT_PASSWORD: ${DEVKIT_DATABASE_PASSWORD:?database password is required}
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root --password=$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - database:/var/lib/mysql
+      - ${DEVKIT_BASELINE_DIR:?baseline directory must be set}:/devkit-baselines
+
+volumes:
+  database:
+    name: ${DEVKIT_DATABASE_VOLUME:?database volume is required}

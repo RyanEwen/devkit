@@ -37,7 +37,8 @@ import {
 import { baselineArchivePath, captureDataBaseline, restoreDataBaseline } from '../src/data-baseline.mjs'
 import { execFileSync } from 'node:child_process'
 
-import { composeUp, infraComposeEnv, probeDocker } from '../src/docker.mjs'
+import { composeUp, databaseCompose, infraComposeEnv, probeDocker } from '../src/docker.mjs'
+import { selectDatabaseProfile } from '../src/database-profile.mjs'
 import { loadProjectConfig } from '../src/project-config.mjs'
 import { runDoctor } from '../src/doctor.mjs'
 
@@ -90,7 +91,7 @@ function bootstrap() {
   // devkit and refreshed on bootstrap so an existing install gains new services. A changed file is
   // retained as `.previous` before replacement; unrelated files in the directory are untouched.
   mkdirSync(infraDir, { recursive: true })
-  for (const filename of ['compose.yml', 'traefik.yml']) {
+  for (const filename of ['compose.yml', 'postgres.yml', 'mariadb.yml', 'traefik.yml']) {
     const source = path.join(packageDir, 'infra', filename)
     const target = path.join(infraDir, filename)
     if (existsSync(target) && readFileSync(target, 'utf8') !== readFileSync(source, 'utf8')) {
@@ -176,6 +177,7 @@ async function snapshot(config) {
   const checkout = checkoutIdentity(repoRoot)
   if (!checkout) fail(`${repoRoot} is not a git checkout`)
   const project = await loadProjectConfig(repoRoot)
+  config = selectDatabaseProfile(config, project)
   const identity = resolveDatabaseIdentity(checkout, project)
 
   if (!identity.isPrimary) {
@@ -199,6 +201,7 @@ async function reset(config, args) {
   const checkout = checkoutIdentity(repoRoot)
   if (!checkout) fail(`${repoRoot} is not a git checkout`)
   const project = await loadProjectConfig(repoRoot)
+  config = selectDatabaseProfile(config, project)
   const identity = resolveDatabaseIdentity(checkout, project)
   if (identity.isPrimary) {
     fail(
@@ -230,6 +233,7 @@ async function prune(config, args) {
   const checkout = checkoutIdentity(repoRoot)
   if (!checkout) fail(`${repoRoot} is not a git checkout`)
   const project = await loadProjectConfig(repoRoot)
+  config = selectDatabaseProfile(config, project)
   const identity = resolveDatabaseIdentity(checkout, project)
 
   const orphans = findOrphanDatabases(config, identity, liveDatabaseNames(project), project)
@@ -258,13 +262,36 @@ function liveDatabaseNames(project) {
     .map((checkout) => resolveDatabaseIdentity(deriveCheckoutIdentity(checkout), project).databaseName)
 }
 
-function infra(config) {
-  const started = composeUp(config.infraProject, [path.join(config.infraDir, 'compose.yml')], {
+async function infra(config) {
+  const composeFile = path.join(config.infraDir, 'compose.yml')
+  const proxyStarted = composeUp(config.infraProject, [composeFile], {
     cwd: config.infraDir,
-    env: infraComposeEnv(config)
+    env: infraComposeEnv(config),
+    services: ['proxy']
   })
-  if (!started) fail('the shared stack could not be started', `docker compose -p ${config.infraProject} logs`)
-  console.log('  + proxy, postgres, and mariadb running')
+  if (!proxyStarted) fail('the shared proxy could not be started', `docker compose -p ${config.infraProject} logs proxy`)
+
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) {
+    const defaultsStarted = composeUp(config.infraProject, [composeFile], {
+      cwd: config.infraDir,
+      env: infraComposeEnv(config),
+      services: ['postgres', 'mariadb']
+    })
+    if (!defaultsStarted) fail('the default database profiles could not be started')
+    return console.log('  + proxy and default postgres:16-bookworm and mariadb:12.3.2 profiles running')
+  }
+
+  const project = await loadProjectConfig(repoRoot)
+  config = selectDatabaseProfile(config, project)
+  const database = databaseCompose(config)
+  const databaseStarted = composeUp(database.project, database.files, {
+    cwd: config.infraDir,
+    env: database.env,
+    services: [database.service]
+  })
+  if (!databaseStarted) fail(`the ${project.database.engine}:${config.databaseProfile.version} profile could not be started`)
+  console.log(`  + proxy and ${project.database.engine}:${config.databaseProfile.version} profile running`)
 }
 
 const [command, ...args] = process.argv.slice(2)
@@ -286,7 +313,7 @@ switch (command) {
     await prune(requireConfig(), args)
     break
   case 'infra':
-    infra(requireConfig())
+    await infra(requireConfig())
     break
   default:
     console.log(`devkit gives every checkout and worktree on this machine its own *.localhost
@@ -297,7 +324,7 @@ hostname, its own database and its own ports, all derived from its path.
   devkit snapshot     capture this checkout's dev data as the baseline new ones clone
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)
   devkit prune        drop databases whose worktree is gone (--yes to actually drop)
-  devkit infra        restart the shared stack, e.g. after Docker Desktop restarted
+  devkit infra        restart the proxy + this project's database profile (defaults outside a repo)
 
 A project opts in with a devkit.config.mjs and by calling preflight() from its dev script.
 Without the marker that bootstrap writes, devkit does nothing at all.`)

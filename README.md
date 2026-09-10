@@ -4,9 +4,10 @@ Gives every checkout and worktree on your machine its own `*.localhost` hostname
 and its own ports, all **derived from its path**, so several projects and several worktrees of one
 project can run at the same time without renumbering anything.
 
-Nothing is ever allocated, recorded or reclaimed. Delete a worktree and its names simply stop being
-produced; `devkit prune` finds orphaned databases by re-deriving the live set and diffing it against
-what exists, never by reading a registry that could drift.
+Checkout names and application ports are never allocated or recorded. Delete a worktree and its
+names simply stop being produced; `devkit prune` finds orphaned databases by re-deriving the live
+set and diffing it against what exists. Alternate database-version profiles are the one exception:
+their stable machine ports are recorded under `~/.config/devkit/database-profiles.json`.
 
 ```
 printstream          -> http://printstream.localhost
@@ -21,8 +22,9 @@ One shared stack for the whole machine, installed outside every repo at `~/.conf
 | Piece | Purpose |
 | --- | --- |
 | Traefik on `127.0.0.1:80` | routes each `*.localhost` hostname to that checkout's dev server |
-| One Postgres on `127.0.0.1:5432` | isolated databases for PostgreSQL projects |
-| One MariaDB on `127.0.0.1:3307` | isolated databases for MariaDB/MySQL projects |
+| PostgreSQL 16 on `127.0.0.1:5432` | backward-compatible default server for PostgreSQL projects |
+| MariaDB 12.3.2 on `127.0.0.1:3307` | backward-compatible default server for MariaDB/MySQL projects |
+| Version profiles on allocated loopback ports | separate long-lived servers and volumes for exact alternate tags |
 | `~/.config/devkit/routes` | one generated route file per running checkout, hot-reloaded |
 | `~/.config/devkit/baselines` | the database + seed-data baseline a new worktree starts from |
 
@@ -60,6 +62,7 @@ export default {
   ports: ['web', 'api'],                 // named offsets in this checkout's port block, in order
   database: {                            // omitted means Postgres with a path-derived name
     engine: 'mariadb',
+    version: '10.2.44',                  // optional exact image tag; omitted keeps the default
     name: 'my_existing_dev_database'     // optional primary name; worktrees stay derived
   },
   migrationsTable: '_prisma_migrations', // null if the project has no migrations
@@ -93,7 +96,22 @@ database, restores its seed data, inherits missing `worktreeFiles` from the prim
 registers its proxy route, and returns the environment plus the URLs it resolved to. It never
 overwrites a worktree file.
 
-The returned context includes `database: { engine, name, host, port, user, password, url }`. Devkit
+Projects with the same `engine` and `version` share one local database server, matching deployments
+where several applications use one server. Different versions run concurrently in separate Docker
+Compose projects, named volumes and loopback ports. Devkit allocates the port once and persists it;
+for example, every project selecting `{ engine: 'mariadb', version: '10.2.44' }` uses the same
+MariaDB 10.2.44 profile. The version must be an exact Docker image tag, not an image name, digest or
+range.
+
+Leaving `version` out preserves existing installations exactly: PostgreSQL remains
+`postgres:16-bookworm` on port 5432 and MariaDB remains `mariadb:12.3.2` on port 3307, using their
+existing volumes. Explicitly naming either of those default tags also selects the existing service.
+Selecting another version never imports or reuses the unversioned server's databases or baselines.
+Versioned MariaDB profiles use utf8mb4 with `utf8mb4_unicode_ci`, permissive
+`NO_ENGINE_SUBSTITUTION` mode, a 64 MB packet limit, and the America/New_York timezone. These
+explicit settings keep behavior stable across MariaDB image versions.
+
+The returned context includes `database: { engine, version, name, host, port, user, password, url }`. Devkit
 itself publishes only what it alone can know: `DATABASE_URL`, `DEVKIT_URL`,
 `DEVKIT_HOSTNAME`, and the two Vite settings the **proxy** requires (`VITE_DEV_HOST` and
 `VITE_DEV_ALLOWED_HOSTS`). Everything else is your `env()` to name, because only your project knows
@@ -107,17 +125,20 @@ which variables its servers read.
 | `devkit snapshot` | capture this checkout's data as the baseline new checkouts clone |
 | `devkit reset` | drop and re-clone this worktree's database (`--empty` skips the baseline) |
 | `devkit prune` | drop databases whose worktree is gone (`--yes` to actually drop) |
-| `devkit infra` | restart the shared stack, e.g. after Docker Desktop restarted |
+| `devkit infra` | restart the proxy and this project's selected database profile; outside a repo, start both defaults |
 | `devproxy add <name> <port>` | give any dev server a `*.localhost` name, devkit project or not |
 
 `devkit reset` deliberately refuses on the primary checkout: that database is the real dev data a
 baseline is captured *from*, not a disposable copy.
 
-PostgreSQL baselines are template databases. MariaDB baselines are atomically rotated SQL dump
-files under `~/.config/devkit/baselines`; imports preserve schema, data, triggers, routines, and
+PostgreSQL baselines are template databases inside the selected profile. MariaDB baselines are
+atomically rotated SQL dump files under `~/.config/devkit/baselines`; imports preserve schema, data, triggers, routines, and
 events. The dump uses a consistent transaction, so projects should use transactional tables when a
 snapshot must represent one instant. Existing devcontainer or remote MariaDB data is not imported
 automatically: load it into the primary Devkit database once, then run `devkit snapshot`.
+Database dump filenames and paired filesystem archives include the non-default profile key, so a
+snapshot cannot be restored across incompatible server versions accidentally. Existing unversioned
+baselines remain untouched and continue to belong only to the default profile.
 
 ## Two rules worth knowing
 

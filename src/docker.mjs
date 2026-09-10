@@ -44,7 +44,10 @@ export function probeDocker() {
 
 /** Names of the running containers in a Compose project, empty when the project is down. */
 export function composeContainers(project) {
-  const result = run('docker', ['compose', '-p', project, 'ps', '--services', '--filter', 'status=running'])
+  const result = run('docker', [
+    'ps', '--filter', `label=com.docker.compose.project=${project}`,
+    '--filter', 'status=running', '--format', '{{.Label "com.docker.compose.service"}}'
+  ])
   if (result.status !== 0) return []
   return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
 }
@@ -77,9 +80,40 @@ export function infraComposeEnv(config) {
   }
 }
 
+/** Compose invocation for the selected default or versioned database profile. */
+export function databaseCompose(config) {
+  const profile = config.databaseProfile
+  if (!profile || profile.isDefault) {
+    return {
+      project: config.infraProject,
+      files: [profile?.composeFile ?? `${config.infraDir}/compose.yml`],
+      service: profile?.service ?? POSTGRES_SERVICE,
+      env: infraComposeEnv(config)
+    }
+  }
+  const settings = config[profile.engine]
+  return {
+    project: profile.project,
+    files: [profile.composeFile],
+    service: profile.service,
+    env: {
+      DEVKIT_DATABASE_IMAGE: `${profile.engine}:${profile.version}`,
+      DEVKIT_DATABASE_PORT: String(settings.port),
+      DEVKIT_DATABASE_USER: settings.user,
+      DEVKIT_DATABASE_PASSWORD: settings.password,
+      DEVKIT_DATABASE_VOLUME: profile.volume,
+      DEVKIT_BASELINE_DIR: config.baselineDir
+    }
+  }
+}
+
 /** Resolves a Compose service to its container id, or null when it is not running. */
 export function composeContainerId(project, service) {
-  const result = run('docker', ['compose', '-p', project, 'ps', '-q', service])
+  const result = run('docker', [
+    'ps', '-q', '--filter', `label=com.docker.compose.project=${project}`,
+    '--filter', `label=com.docker.compose.service=${service}`,
+    '--filter', 'status=running'
+  ])
   const id = result.status === 0 ? result.stdout.trim().split('\n')[0] : ''
   return id || null
 }
@@ -93,7 +127,8 @@ export function composeContainerId(project, service) {
  * can read it out of `ps`. It is only a throwaway dev credential, but the habit is the point.
  */
 export function postgresExec(config, script, { input } = {}) {
-  const containerId = composeContainerId(config.infraProject, POSTGRES_SERVICE)
+  const runtime = databaseRuntime(config, 'postgres')
+  const containerId = composeContainerId(runtime.project, runtime.service)
   if (!containerId) return { ok: false, stderr: 'the shared Postgres container is not running' }
 
   const result = run(
@@ -122,7 +157,8 @@ export function postgresSql(config, sql, { database = 'postgres' } = {}) {
 
 /** Runs a command inside the shared MariaDB container without exposing its password in argv. */
 export function mariadbExec(config, script, { input } = {}) {
-  const containerId = composeContainerId(config.infraProject, MARIADB_SERVICE)
+  const runtime = databaseRuntime(config, 'mariadb')
+  const containerId = composeContainerId(runtime.project, runtime.service)
   if (!containerId) return { ok: false, stderr: 'the shared MariaDB container is not running' }
 
   const result = run(
@@ -137,11 +173,18 @@ export function mariadbExec(config, script, { input } = {}) {
   }
 }
 
+function databaseRuntime(config, engine) {
+  const profile = config.databaseProfile
+  return profile?.engine === engine
+    ? { project: profile.project, service: profile.service }
+    : { project: config.infraProject, service: engine }
+}
+
 /** Runs one MariaDB statement and returns its unheaded, tab-separated output. */
 export function mariadbSql(config, sql, { database } = {}) {
   const user = shellQuote(config.mariadb.user)
   const selected = database ? ` ${shellQuote(database)}` : ''
-  return mariadbExec(config, `mariadb --batch --skip-column-names -u ${user}${selected} -e ${shellQuote(sql)}`)
+  return mariadbExec(config, `client=$(command -v mariadb || command -v mysql) && "$client" --batch --skip-column-names -u ${user}${selected} -e ${shellQuote(sql)}`)
 }
 
 export function shellQuote(value) {

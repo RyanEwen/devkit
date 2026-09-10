@@ -7,9 +7,9 @@
 # infrastructure they were never told about. Traefik reaches host processes over
 # `host.docker.internal` instead, which needs no shared network at all.
 #
-# Bound to 127.0.0.1 on both published ports. These carry a throwaway password and no auth, so they
-# must not be reachable from the LAN; on WSL the loopback bind is still reachable from Windows,
-# which is the whole point.
+# Bound to both IPv4 and IPv6 loopback. These carry a throwaway password and no auth, so they must
+# not be reachable from the LAN. Some browsers resolve *.localhost to ::1 without falling back to
+# 127.0.0.1, while Docker Desktop exposes WSL loopback listeners to Windows on both protocols.
 
 services:
   # Routes `<worktree>.<repo>.localhost` to whichever host port that checkout's Vite is on. Routes
@@ -23,6 +23,7 @@ services:
     restart: always
     ports:
       - "127.0.0.1:${DEVKIT_PROXY_PORT:-80}:80"
+      - "[::1]:${DEVKIT_PROXY_PORT:-80}:80"
     volumes:
       - ${DEVKIT_ROUTES_DIR:?routes directory must be set}:/routes:ro
       - ./traefik.yml:/etc/traefik/traefik.yml:ro

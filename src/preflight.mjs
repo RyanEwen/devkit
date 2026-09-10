@@ -27,7 +27,8 @@ import {
   snapshotBaseline
 } from './database.mjs'
 import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
-import { composeUp, infraComposeEnv, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
+import { databaseCompose, composeUp, infraComposeEnv, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
+import { selectDatabaseProfile } from './database-profile.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { writeRoute } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
@@ -47,13 +48,14 @@ export class PreflightError extends Error {
  * migrations, which is why this is called before that step rather than alongside it.
  */
 export async function preflight({ repoRoot, log = console.log }) {
-  const config = devkitConfig()
-  if (!config) return null
+  const hostConfig = devkitConfig()
+  if (!hostConfig) return null
 
   const checkout = checkoutIdentity(repoRoot)
   if (!checkout) return null
 
   const project = await loadProjectConfig(repoRoot)
+  const config = selectDatabaseProfile(hostConfig, project)
   const identity = resolveDatabaseIdentity(checkout, project)
   const ports = checkoutPorts(identity, project.ports)
   const lines = []
@@ -152,18 +154,24 @@ function baseEnv({ identity, ports, url, databaseUrl }) {
 function ensureInfra(config, project, log) {
   const composeFile = path.join(config.infraDir, 'compose.yml')
   mkdirSync(config.routesDir, { recursive: true })
-  const started = composeUp(config.infraProject, [composeFile], {
+  const proxyStarted = composeUp(config.infraProject, [composeFile], {
     cwd: config.infraDir,
     env: infraComposeEnv(config),
-    services: ['proxy', project.database.engine === 'mariadb' ? 'mariadb' : 'postgres']
+    services: ['proxy']
   })
-  if (!started) {
+  const database = databaseCompose(config)
+  const databaseStarted = composeUp(database.project, database.files, {
+    cwd: config.infraDir,
+    env: database.env,
+    services: [database.service]
+  })
+  if (!proxyStarted || !databaseStarted) {
     throw new PreflightError(
       `the shared dev infrastructure at ${config.infraDir} could not be started`,
       'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
     )
   }
-  log?.('[devkit] shared infrastructure ready')
+  log?.(`[devkit] shared infrastructure ready (${project.database.engine}:${config.databaseProfile.version})`)
 }
 
 /** A container accepts TCP before it accepts queries; poll until a trivial query succeeds. */
@@ -175,7 +183,7 @@ function waitForDatabase(config, project, { attempts = 30, delayMs = 500 } = {})
   }
   throw new PreflightError(
     `the shared ${engine === 'mariadb' ? 'MariaDB' : 'Postgres'} did not become ready`,
-    `check \`docker compose -p ${config.infraProject} logs ${engine}\``
+    `check \`docker compose -p ${config.databaseProfile.project} logs ${config.databaseProfile.service}\``
   )
 }
 

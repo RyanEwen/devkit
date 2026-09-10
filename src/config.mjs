@@ -77,7 +77,7 @@ export function devkitConfig({ warn = console.warn, containerCheck = inContainer
   return {
     markerPath,
     configDir,
-    /** One shared Compose project for the proxy and supported database services. */
+    /** Backward-compatible Compose project for the proxy and default database profiles. */
     infraProject: marker.infraProject ?? 'devkit-infra',
     /** Where the infra stack was installed. Shared across projects, so it lives outside any repo. */
     infraDir: expandHome(marker.infraDir ?? path.join(configDir, 'infra')),
@@ -128,6 +128,7 @@ export function checkoutDatabase(config, databaseName, engine = 'postgres') {
   const { host, port, user, password } = config[engine]
   return {
     engine,
+    ...(config.databaseProfile?.version ? { version: config.databaseProfile.version } : {}),
     name: databaseName,
     host,
     port,

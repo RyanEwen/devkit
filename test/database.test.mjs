@@ -49,3 +49,13 @@ test('MariaDB baselines are per-clone dump files with measurable age', () => {
   utimesSync(baseline, new Date(now - 2 * 86_400_000), new Date(now - 2 * 86_400_000))
   assert.ok(Math.abs(databaseBaselineAgeDays(config, identity, mariaProject, { now }) - 2) < 0.001)
 })
+
+test('non-default version profiles cannot consume an unversioned MariaDB baseline', () => {
+  const baselineDir = mkdtempSync(path.join(os.tmpdir(), 'devkit-mariadb-version-baseline-'))
+  const identity = resolveDatabaseIdentity(checkout(), mariaProject)
+  const versioned = databaseBaselineLabel({
+    baselineDir,
+    databaseProfile: { key: 'mariadb-10-2', isDefault: false }
+  }, identity, mariaProject)
+  assert.equal(versioned, path.join(baselineDir, 'app-mariadb-10-2.sql'))
+})

@@ -16,7 +16,7 @@ function withConfig(source) {
 test('a project with no config gets defaults rather than an error', async () => {
   const config = await withConfig(null)
   assert.deepEqual(config.ports, ['web', 'api'])
-  assert.deepEqual(config.database, { engine: 'postgres', name: null })
+  assert.deepEqual(config.database, { engine: 'postgres', version: null, name: null })
   assert.deepEqual(config.baselinePaths, [])
   assert.deepEqual(config.worktreeFiles, [])
   assert.equal(config.configPath, null)
@@ -40,7 +40,14 @@ test('a project can select MariaDB and preserve its established primary database
   const config = await withConfig(`export default {
     database: { engine: 'mariadb', name: 'wyliebiz_app' }
   }`)
-  assert.deepEqual(config.database, { engine: 'mariadb', name: 'wyliebiz_app' })
+  assert.deepEqual(config.database, { engine: 'mariadb', version: null, name: 'wyliebiz_app' })
+})
+
+test('a project can pin an exact database image tag', async () => {
+  const maria = await withConfig(`export default { database: { engine: 'mariadb', version: '10.2', name: 'shared' } }`)
+  const postgres = await withConfig(`export default { database: { engine: 'postgres', version: '17-bookworm' } }`)
+  assert.equal(maria.database.version, '10.2')
+  assert.equal(postgres.database.version, '17-bookworm')
 })
 
 test('env receives the derived context and returns the project\'s own variables', async () => {
@@ -66,6 +73,8 @@ test('a malformed config is rejected with a message naming the field', async () 
   await assert.rejects(withConfig('export default { database: "mariadb" }'), /`database` must be an object/)
   await assert.rejects(withConfig('export default { database: { engine: "sqlite" } }'), /`database.engine`/)
   await assert.rejects(withConfig('export default { database: { name: "bad-name" } }'), /`database.name`/)
+  await assert.rejects(withConfig('export default { database: { version: "mariadb:10.2" } }'), /`database.version`/)
+  await assert.rejects(withConfig('export default { database: { version: "10/2" } }'), /`database.version`/)
   await assert.rejects(withConfig('export default 42'), /must `export default` an object/)
 })
 

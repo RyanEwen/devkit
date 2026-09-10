@@ -31,7 +31,7 @@ const DEFAULTS = {
   /** Named port offsets within this checkout's block, in order. */
   ports: ['web', 'api'],
   /** Database backend and optional primary database name. Existing projects default to Postgres. */
-  database: { engine: 'postgres', name: null },
+  database: { engine: 'postgres', version: null, name: null },
   /** The migration bookkeeping table, so `doctor` can report how far a database has been migrated. */
   migrationsTable: '_prisma_migrations',
   /** Repo-relative paths captured alongside the database so a new worktree starts usable. */
@@ -64,6 +64,12 @@ function validate(config) {
   }
   if (!['postgres', 'mariadb'].includes(config.database.engine)) {
     fail('`database.engine` must be "postgres" or "mariadb"')
+  }
+  if (
+    config.database.version != null &&
+    (typeof config.database.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(config.database.version))
+  ) {
+    fail('`database.version` must be an exact Docker image tag containing only letters, numbers, dots, underscores, and hyphens')
   }
   if (config.database.name != null && !/^[a-z0-9_]+$/.test(config.database.name)) {
     fail('`database.name` must contain only lowercase letters, numbers, and underscores')
