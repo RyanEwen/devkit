@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Run tests
+        run: npm test
+
+      - name: Package VS Code browser bridge
+        run: npm run build:browser-extension
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: devkit-browser
+          path: vscode-extension/devkit-browser-*.vsix
+          if-no-files-found: error
