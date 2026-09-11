@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { browserCommand, checkoutBrowserUrls, scheduleBrowserOpen } from '../src/browser.mjs'
+import { browserCommand, checkoutBrowserUrls, isVsCodeTerminal, scheduleBrowserOpen } from '../src/browser.mjs'
 
 test('browser URLs preserve the proxy port and allow a separate health path', () => {
   assert.deepEqual(
@@ -28,17 +28,32 @@ test('browser commands use the native host opener', () => {
   })
 })
 
+test('VS Code terminals are detected from local and remote environment markers', () => {
+  assert.equal(isVsCodeTerminal({ TERM_PROGRAM: 'vscode' }), true)
+  assert.equal(isVsCodeTerminal({ VSCODE_CWD: '/workspace' }), true)
+  assert.equal(isVsCodeTerminal({ VSCODE_IPC_HOOK_CLI: '/tmp/vscode-ipc.sock' }), true)
+  assert.equal(isVsCodeTerminal({ TERM_PROGRAM: 'other' }), false)
+})
+
 test('DEVKIT_OPEN_BROWSER=0 suppresses the detached opener', () => {
-  const previous = process.env.DEVKIT_OPEN_BROWSER
-  process.env.DEVKIT_OPEN_BROWSER = '0'
   let spawned = false
-  try {
-    assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/', {
-      spawnImpl: () => { spawned = true }
-    }), false)
-    assert.equal(spawned, false)
-  } finally {
-    if (previous === undefined) delete process.env.DEVKIT_OPEN_BROWSER
-    else process.env.DEVKIT_OPEN_BROWSER = previous
-  }
+  assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/', {
+    env: { DEVKIT_OPEN_BROWSER: '0' },
+    spawnImpl: () => { spawned = true }
+  }), false)
+  assert.equal(spawned, false)
+})
+
+test('VS Code browser waiter inherits output so its ready URL is clickable', () => {
+  let options
+  let unreferenced = false
+  assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/', {
+    env: { TERM_PROGRAM: 'vscode' },
+    spawnImpl: (_command, _args, spawnOptions) => {
+      options = spawnOptions
+      return { unref: () => { unreferenced = true } }
+    }
+  }), true)
+  assert.deepEqual(options.stdio, ['ignore', 'inherit', 'inherit'])
+  assert.equal(unreferenced, true)
 })

@@ -109,8 +109,10 @@ Their proxy origins are available to `env()` in `dependencyOrigins`, including a
 Devkit proxy port when configured.
 
 Set `browser` to open this checkout automatically after its `healthPath` returns a successful
-response. It is opt-in, uses the host's native browser opener, and can be suppressed for one run
-with `DEVKIT_OPEN_BROWSER=0`.
+response. It is opt-in and can be suppressed for one run with `DEVKIT_OPEN_BROWSER=0`. Devkit uses
+the host's native browser opener outside VS Code. In a VS Code terminal it prints the ready URL
+instead, because VS Code only exposes its integrated browser through editor commands; Ctrl+click
+the URL to open it inside the editor without also launching the desktop browser.
 
 Projects with the same `engine` and `version` share one local database server, matching deployments
 where several applications use one server. Different versions run concurrently in separate Docker

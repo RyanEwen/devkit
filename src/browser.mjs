@@ -12,13 +12,20 @@ export function checkoutBrowserUrls(origin, browser) {
   }
 }
 
+/** VS Code owns its integrated browser and does not expose it through the `code` CLI. */
+export function isVsCodeTerminal(env = process.env) {
+  return env.TERM_PROGRAM === 'vscode' || Boolean(env.VSCODE_CWD || env.VSCODE_IPC_HOOK_CLI)
+}
+
 /** Starts a detached waiter so preflight never delays the project's actual server process. */
-export function scheduleBrowserOpen(openUrl, healthUrl, { spawnImpl = spawn } = {}) {
-  if (process.env.DEVKIT_OPEN_BROWSER === '0') return false
+export function scheduleBrowserOpen(openUrl, healthUrl, { spawnImpl = spawn, env = process.env } = {}) {
+  if (env.DEVKIT_OPEN_BROWSER === '0') return false
+  const showLink = isVsCodeTerminal(env)
   const child = spawnImpl(process.execPath, [modulePath, '--wait', openUrl, healthUrl], {
     detached: true,
-    env: process.env,
-    stdio: 'ignore'
+    env,
+    // Keep stdout attached only when the worker must hand VS Code a clickable localhost link.
+    stdio: showLink ? ['ignore', 'inherit', 'inherit'] : 'ignore'
   })
   child.unref()
   return true
@@ -36,6 +43,8 @@ export function browserCommand(url, { platform = process.platform, env = process
 async function waitAndOpen(openUrl, healthUrl, {
   fetchImpl = fetch,
   spawnImpl = spawn,
+  log = console.log,
+  env = process.env,
   timeoutMs = 120_000,
   pollMs = 500
 } = {}) {
@@ -47,6 +56,10 @@ async function waitAndOpen(openUrl, healthUrl, {
         signal: AbortSignal.timeout(2_000)
       })
       if (response.ok) {
+        if (isVsCodeTerminal(env)) {
+          log(`[devkit] ready: ${openUrl} (Ctrl+click to open in VS Code)`)
+          return true
+        }
         const { command, args } = browserCommand(openUrl)
         const browser = spawnImpl(command, args, { detached: true, stdio: 'ignore', windowsHide: true })
         browser.unref()
