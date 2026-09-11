@@ -1,5 +1,7 @@
-/** Opens a checkout in the host browser after its proxied route becomes healthy. */
+/** Opens a checkout after its proxied route becomes healthy. */
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const modulePath = fileURLToPath(import.meta.url)
@@ -12,26 +14,47 @@ export function checkoutBrowserUrls(origin, browser) {
   }
 }
 
-/** VS Code owns its integrated browser and does not expose it through the `code` CLI. */
 export function isVsCodeTerminal(env = process.env) {
-  return env.TERM_PROGRAM === 'vscode' || Boolean(env.VSCODE_CWD || env.VSCODE_IPC_HOOK_CLI)
+  return env.TERM_PROGRAM === 'vscode' || Boolean(env.VSCODE_IPC_HOOK_CLI)
 }
 
 /** Starts a detached waiter so preflight never delays the project's actual server process. */
 export function scheduleBrowserOpen(openUrl, healthUrl, { spawnImpl = spawn, env = process.env } = {}) {
   if (env.DEVKIT_OPEN_BROWSER === '0') return false
-  const showLink = isVsCodeTerminal(env)
+  const editorOpen = isVsCodeTerminal(env)
   const child = spawnImpl(process.execPath, [modulePath, '--wait', openUrl, healthUrl], {
     detached: true,
     env,
-    // Keep stdout attached only when the worker must hand VS Code a clickable localhost link.
-    stdio: showLink ? ['ignore', 'inherit', 'inherit'] : 'ignore'
+    // Surface a failed editor handoff instead of silently losing the browser request.
+    stdio: editorOpen ? ['ignore', 'inherit', 'inherit'] : 'ignore'
   })
   child.unref()
   return true
 }
 
-export function browserCommand(url, { platform = process.platform, env = process.env } = {}) {
+/** Finds VS Code Server's native URL bridge from the environment inherited by its terminal. */
+export function vsCodeBrowserHelper(env = process.env, { existsSyncImpl = existsSync } = {}) {
+  if (!env.VSCODE_IPC_HOOK_CLI) return null
+  if (env.BROWSER && existsSyncImpl(env.BROWSER)) return env.BROWSER
+
+  try {
+    const messagesFile = JSON.parse(env.VSCODE_NLS_CONFIG ?? '{}').defaultMessagesFile
+    if (!messagesFile) return null
+    const serverRoot = path.dirname(path.dirname(messagesFile))
+    const helper = path.join(serverRoot, 'bin/helpers/browser.sh')
+    return existsSyncImpl(helper) ? helper : null
+  } catch {
+    return null
+  }
+}
+
+export function browserCommand(url, {
+  platform = process.platform,
+  env = process.env,
+  existsSyncImpl = existsSync
+} = {}) {
+  const editorHelper = vsCodeBrowserHelper(env, { existsSyncImpl })
+  if (editorHelper) return { command: editorHelper, args: [url] }
   if (platform === 'win32') return { command: 'cmd', args: ['/c', 'start', '', url] }
   if (platform === 'darwin') return { command: 'open', args: [url] }
   if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) {
@@ -56,11 +79,7 @@ async function waitAndOpen(openUrl, healthUrl, {
         signal: AbortSignal.timeout(2_000)
       })
       if (response.ok) {
-        if (isVsCodeTerminal(env)) {
-          log(`[devkit] ready: ${openUrl} (Ctrl+click to open in VS Code)`)
-          return true
-        }
-        const { command, args } = browserCommand(openUrl)
+        const { command, args } = browserCommand(openUrl, { env })
         const browser = spawnImpl(command, args, { detached: true, stdio: 'ignore', windowsHide: true })
         browser.unref()
         return true

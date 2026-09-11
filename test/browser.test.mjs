@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { browserCommand, checkoutBrowserUrls, isVsCodeTerminal, scheduleBrowserOpen } from '../src/browser.mjs'
+import {
+  browserCommand,
+  checkoutBrowserUrls,
+  isVsCodeTerminal,
+  scheduleBrowserOpen,
+  vsCodeBrowserHelper
+} from '../src/browser.mjs'
 
 test('browser URLs preserve the proxy port and allow a separate health path', () => {
   assert.deepEqual(
@@ -30,9 +36,28 @@ test('browser commands use the native host opener', () => {
 
 test('VS Code terminals are detected from local and remote environment markers', () => {
   assert.equal(isVsCodeTerminal({ TERM_PROGRAM: 'vscode' }), true)
-  assert.equal(isVsCodeTerminal({ VSCODE_CWD: '/workspace' }), true)
   assert.equal(isVsCodeTerminal({ VSCODE_IPC_HOOK_CLI: '/tmp/vscode-ipc.sock' }), true)
   assert.equal(isVsCodeTerminal({ TERM_PROGRAM: 'other' }), false)
+})
+
+test('VS Code Server browser helper is resolved from terminal environment', () => {
+  const env = {
+    VSCODE_IPC_HOOK_CLI: '/run/user/1000/vscode-ipc.sock',
+    VSCODE_NLS_CONFIG: JSON.stringify({
+      defaultMessagesFile: '/home/me/.vscode-server/bin/commit/out/nls.messages.json'
+    })
+  }
+  assert.equal(
+    vsCodeBrowserHelper(env, { existsSyncImpl: () => true }),
+    '/home/me/.vscode-server/bin/commit/bin/helpers/browser.sh'
+  )
+  assert.deepEqual(browserCommand('http://app.localhost/', {
+    env: { ...env, WSL_DISTRO_NAME: 'Ubuntu' },
+    existsSyncImpl: () => true
+  }), {
+    command: '/home/me/.vscode-server/bin/commit/bin/helpers/browser.sh',
+    args: ['http://app.localhost/']
+  })
 })
 
 test('DEVKIT_OPEN_BROWSER=0 suppresses the detached opener', () => {
