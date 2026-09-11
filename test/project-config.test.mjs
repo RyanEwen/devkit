@@ -20,6 +20,7 @@ test('a project with no config gets defaults rather than an error', async () => 
   assert.deepEqual(config.baselinePaths, [])
   assert.deepEqual(config.worktreeFiles, [])
   assert.deepEqual(config.dependencies, [])
+  assert.equal(config.browser, null)
   assert.equal(config.configPath, null)
   assert.deepEqual(config.env({}), {})
 })
@@ -76,6 +77,9 @@ test('a malformed config is rejected with a message naming the field', async () 
   await assert.rejects(withConfig('export default { dependencies: [{ name: "Public API" }] }'), /lowercase hostname label/)
   await assert.rejects(withConfig('export default { dependencies: [{ name: "api", healthPath: "health" }] }'), /must start with/)
   await assert.rejects(withConfig('export default { dependencies: [{ name: "api" }, { name: "api" }] }'), /must not repeat/)
+  await assert.rejects(withConfig('export default { browser: true }'), /`browser` must be an object/)
+  await assert.rejects(withConfig('export default { browser: { path: "app" } }'), /`browser.path` must start with/)
+  await assert.rejects(withConfig('export default { browser: { path: "/", healthPath: "health" } }'), /`browser.healthPath` must start with/)
   await assert.rejects(withConfig('export default { database: "mariadb" }'), /`database` must be an object/)
   await assert.rejects(withConfig('export default { database: { engine: "sqlite" } }'), /`database.engine`/)
   await assert.rejects(withConfig('export default { database: { name: "bad-name" } }'), /`database.name`/)
@@ -94,4 +98,11 @@ test('a project can declare independently managed runtime dependencies', async (
     dependencies: [{ name: 'public-api', healthPath: '/api/_health' }]
   }`)
   assert.deepEqual(config.dependencies, [{ name: 'public-api', healthPath: '/api/_health' }])
+})
+
+test('a project can opt into opening its browser URL after a separate health check', async () => {
+  const config = await withConfig(`export default {
+    browser: { path: '/api/', healthPath: '/api/_health' }
+  }`)
+  assert.deepEqual(config.browser, { path: '/api/', healthPath: '/api/_health' })
 })

@@ -72,6 +72,7 @@ export default {
   dependencies: [                        // independently started projects required at preflight
     { name: 'public-api', healthPath: '/api/_health' }
   ],
+  browser: { path: '/', healthPath: '/_health' }, // optional automatic browser tab
   env: ({ ports, url, identity, database, dependencyOrigins }) => ({ // whatever YOUR dev servers read
     API_PORT: String(ports.api),
     CLIENT_ORIGIN: url,
@@ -106,6 +107,10 @@ successful response from its `healthPath` (default `/`) and stops with an action
 not available. Dependencies remain separate projects: Devkit never starts or stops them.
 Their proxy origins are available to `env()` in `dependencyOrigins`, including a non-default
 Devkit proxy port when configured.
+
+Set `browser` to open this checkout automatically after its `healthPath` returns a successful
+response. It is opt-in, uses the host's native browser opener, and can be suppressed for one run
+with `DEVKIT_OPEN_BROWSER=0`.
 
 Projects with the same `engine` and `version` share one local database server, matching deployments
 where several applications use one server. Different versions run concurrently in separate Docker

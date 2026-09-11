@@ -16,6 +16,7 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
+import { checkoutBrowserUrls, scheduleBrowserOpen } from './browser.mjs'
 import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
 import { checkoutDatabase, devkitConfig } from './config.mjs'
 import {
@@ -103,6 +104,10 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   }
 
   const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
+  if (project.browser) {
+    const browser = checkoutBrowserUrls(url, project.browser)
+    scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
+  }
   const engine = project.database.engine
   const database = checkoutDatabase(config, identity.databaseName, engine)
   const databaseUrl = database.url

@@ -40,6 +40,8 @@ const DEFAULTS = {
   worktreeFiles: [],
   /** Other Devkit projects that must already answer before this project starts. */
   dependencies: [],
+  /** Browser destination to open once this checkout answers, or null to leave the browser alone. */
+  browser: null,
   /** Returns the environment the project's dev servers need. See `preflight.mjs` for the argument. */
   env: () => ({}),
   /**
@@ -97,6 +99,19 @@ function validate(config) {
   }
   if (new Set(config.dependencies.map(({ name }) => name)).size !== config.dependencies.length) {
     fail('`dependencies` must not repeat a project name')
+  }
+  if (config.browser != null) {
+    if (!config.browser || typeof config.browser !== 'object' || Array.isArray(config.browser)) {
+      fail('`browser` must be an object with a `path` and optional `healthPath`, or null')
+    }
+    if (typeof config.browser.path !== 'string' || !config.browser.path.startsWith('/')) {
+      fail('`browser.path` must start with "/"')
+    }
+    if (config.browser.healthPath != null && (
+      typeof config.browser.healthPath !== 'string' || !config.browser.healthPath.startsWith('/')
+    )) {
+      fail('`browser.healthPath` must start with "/"')
+    }
   }
   if (typeof config.env !== 'function') fail('`env` must be a function returning an object')
   if (!Array.isArray(config.checks) || config.checks.some((check) => typeof check !== 'function')) {
