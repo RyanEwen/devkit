@@ -16,7 +16,7 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { checkoutBrowserUrls, scheduleBrowserOpen } from './browser.mjs'
+import { checkoutBrowserUrls, isVsCodeTerminal, scheduleBrowserOpen } from './browser.mjs'
 import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
 import { checkoutDatabase, devkitConfig } from './config.mjs'
 import {
@@ -104,10 +104,13 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   }
 
   const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
+  const directUrl = `http://localhost:${ports.web}`
   // `checkDependencies: false` is used by project `dev:down` commands. Teardown must not schedule
   // a fresh browser tab while it removes the route and containers.
   if (project.browser && checkDependencies) {
-    const browser = checkoutBrowserUrls(url, project.browser)
+    // VS Code recognizes literal localhost URLs, but not Devkit's valid *.localhost hostnames.
+    const openOrigin = isVsCodeTerminal() ? directUrl : url
+    const browser = checkoutBrowserUrls(url, project.browser, { openOrigin })
     scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
   }
   const engine = project.database.engine
@@ -117,7 +120,7 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
     identity,
     ports,
     url,
-    directUrl: `http://localhost:${ports.web}`,
+    directUrl,
     database,
     databaseUrl,
     dependencyOrigins: dependencyOrigins(project.dependencies, config.proxyPort),

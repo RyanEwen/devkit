@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url'
 
 const modulePath = fileURLToPath(import.meta.url)
 
-export function checkoutBrowserUrls(origin, browser) {
-  const base = `${origin.replace(/\/$/, '')}/`
+export function checkoutBrowserUrls(origin, browser, { openOrigin = origin } = {}) {
+  const healthBase = `${origin.replace(/\/$/, '')}/`
+  const openBase = `${openOrigin.replace(/\/$/, '')}/`
   return {
-    openUrl: new URL(browser.path.replace(/^\//, ''), base).href,
-    healthUrl: new URL((browser.healthPath ?? browser.path).replace(/^\//, ''), base).href
+    openUrl: new URL(browser.path.replace(/^\//, ''), openBase).href,
+    healthUrl: new URL((browser.healthPath ?? browser.path).replace(/^\//, ''), healthBase).href
   }
 }
 

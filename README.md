@@ -111,7 +111,9 @@ Devkit proxy port when configured.
 Set `browser` to open this checkout automatically after its `healthPath` returns a successful
 response. It is opt-in and can be suppressed for one run with `DEVKIT_OPEN_BROWSER=0`. Inside a
 VS Code remote terminal, Devkit uses the editor's native URL bridge so VS Code can apply its
-configured localhost opener. Elsewhere it uses the host's native browser opener.
+configured localhost opener. It launches the direct `localhost:<port>` URL because VS Code does
+not classify `*.localhost` subdomains as local links. Elsewhere it uses the proxy hostname and the
+host's native browser opener.
 
 Projects with the same `engine` and `version` share one local database server, matching deployments
 where several applications use one server. Different versions run concurrently in separate Docker

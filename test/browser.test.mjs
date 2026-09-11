@@ -22,6 +22,18 @@ test('browser URLs preserve the proxy port and allow a separate health path', ()
   )
 })
 
+test('browser URLs can open directly while health-checking through the proxy', () => {
+  assert.deepEqual(
+    checkoutBrowserUrls('http://app.localhost', { path: '/', healthPath: '/_health' }, {
+      openOrigin: 'http://localhost:23100'
+    }),
+    {
+      openUrl: 'http://localhost:23100/',
+      healthUrl: 'http://app.localhost/_health'
+    }
+  )
+})
+
 test('browser commands use the native host opener', () => {
   assert.deepEqual(browserCommand('http://app.localhost', { platform: 'darwin', env: {} }), {
     command: 'open', args: ['http://app.localhost']
