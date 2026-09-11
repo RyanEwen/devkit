@@ -1,11 +1,9 @@
-# One non-default PostgreSQL version profile. Devkit starts this file under a stable profile-specific
-# Compose project and supplies an exact image tag, loopback port and named volume.
+# PostgreSQL owned by one checkout. Application services join this Compose project, so the
+# database stays private to its network and needs no host port.
 services:
   database:
     image: ${DEVKIT_DATABASE_IMAGE:?exact PostgreSQL image is required}
-    restart: always
-    ports:
-      - "127.0.0.1:${DEVKIT_DATABASE_PORT:?database port is required}:5432"
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DEVKIT_DATABASE_USER:?database user is required}
       POSTGRES_PASSWORD: ${DEVKIT_DATABASE_PASSWORD:?database password is required}
@@ -13,11 +11,12 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DEVKIT_DATABASE_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      interval: 5s
+      timeout: 3s
+      retries: 20
     volumes:
       - database:/var/lib/postgresql/data
+      - ${DEVKIT_BASELINE_DIR:?baseline directory must be set}:/devkit-baselines
 
 volumes:
   database:

@@ -3,18 +3,11 @@ import { test } from 'node:test'
 
 import { baselineArchivePath } from '../src/data-baseline.mjs'
 
-test('filesystem baselines stay backward-compatible for the default database profile', () => {
-  assert.equal(
-    baselineArchivePath({ baselineDir: '/baselines' }, { repoName: 'app' }),
-    '/baselines/app-data.tar.gz'
-  )
-})
-
-test('filesystem baselines are isolated by non-default database version profile', () => {
+test('filesystem baselines include the database runtime', () => {
   assert.equal(
     baselineArchivePath({
       baselineDir: '/baselines',
-      databaseProfile: { key: 'postgres-17-bookworm', isDefault: false }
+      databaseRuntime: { key: 'postgres-17-bookworm' }
     }, { repoName: 'app' }),
     '/baselines/app-postgres-17-bookworm-data.tar.gz'
   )

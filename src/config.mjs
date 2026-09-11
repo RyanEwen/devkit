@@ -25,8 +25,7 @@ import path from 'node:path'
 /**
  * `~/.config/devkit/`, honouring XDG_CONFIG_HOME.
  *
- * `DEVKIT_CONFIG_DIR` overrides it, which is what the tests use and what lets one machine run two
- * independent stacks (a throwaway one on another proxy port) without touching the real install.
+ * `DEVKIT_CONFIG_DIR` overrides it, which keeps tests and disposable installs separate.
  */
 export function devkitConfigDir() {
   if (process.env.DEVKIT_CONFIG_DIR) return process.env.DEVKIT_CONFIG_DIR
@@ -77,35 +76,15 @@ export function devkitConfig({ warn = console.warn, containerCheck = inContainer
   return {
     markerPath,
     configDir,
-    /** Backward-compatible Compose project for the proxy and default database profiles. */
-    infraProject: marker.infraProject ?? 'devkit-infra',
-    /** Where the infra stack was installed. Shared across projects, so it lives outside any repo. */
-    infraDir: expandHome(marker.infraDir ?? path.join(configDir, 'infra')),
-    /** Traefik watches this directory and hot-reloads; one generated file per running checkout. */
-    routesDir: expandHome(marker.routesDir ?? path.join(configDir, 'routes')),
-    /** Where `data/` baselines are stored, one tarball per clone. */
-    baselineDir: expandHome(marker.baselineDir ?? path.join(configDir, 'baselines')),
-    proxyPort: marker.proxyPort ?? 80,
-    postgres: {
-      host: marker.postgres?.host ?? '127.0.0.1',
-      port: marker.postgres?.port ?? 5432,
-      user: marker.postgres?.user ?? 'postgres',
-      password: marker.postgres?.password ?? 'postgres'
-    },
-    mariadb: {
-      host: marker.mariadb?.host ?? '127.0.0.1',
-      port: marker.mariadb?.port ?? 3307,
-      user: marker.mariadb?.user ?? 'root',
-      password: marker.mariadb?.password ?? 'root',
-      volume: marker.mariadb?.volume ?? 'devkit-mariadb'
-    },
-    /** Refresh nag threshold for the `data/` + database baseline. */
-    baselineMaxAgeDays: marker.baselineMaxAgeDays ?? 14
+    infraProject: 'devkit-infra',
+    infraDir: path.join(configDir, 'infra'),
+    routesDir: path.join(configDir, 'routes'),
+    baselineDir: path.join(configDir, 'baselines'),
+    proxyPort: 80,
+    postgres: { user: 'postgres', password: 'postgres' },
+    mariadb: { user: 'root', password: 'root' },
+    baselineMaxAgeDays: 14
   }
-}
-
-function expandHome(value) {
-  return value.startsWith('~') ? path.join(homedir(), value.slice(1)) : value
 }
 
 /**
@@ -128,7 +107,7 @@ export function checkoutDatabase(config, databaseName, engine = 'postgres') {
   const { host, port, user, password } = config[engine]
   return {
     engine,
-    ...(config.databaseProfile?.version ? { version: config.databaseProfile.version } : {}),
+    ...(config.databaseRuntime?.version ? { version: config.databaseRuntime.version } : {}),
     name: databaseName,
     host,
     port,

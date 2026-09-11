@@ -19,12 +19,11 @@ import {
   databaseBaselineExists,
   databaseBaselineLabel,
   databaseExists,
-  listCheckoutDatabases,
   resolveDatabaseIdentity
 } from './database.mjs'
 import { baselineAgeDays, baselineArchivePath, checkoutNeedsData } from './data-baseline.mjs'
 import { composeContainers, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
-import { selectDatabaseProfile } from './database-profile.mjs'
+import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, probeProjectDependencies } from './project-dependencies.mjs'
 import { routeFilePath } from './proxy.mjs'
@@ -63,7 +62,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     return 1
   }
   const project = await loadProjectConfig(repoRoot)
-  const config = selectDatabaseProfile(hostConfig, project)
+  const config = selectDatabaseRuntime(hostConfig, project, checkout)
   const identity = resolveDatabaseIdentity(checkout, project)
   const ports = checkoutPorts(identity, project.ports)
 
@@ -81,8 +80,8 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   report(OK, 'docker', `daemon ${docker.version}`)
 
   const proxyRunning = composeContainers(config.infraProject)
-  const databaseService = config.databaseProfile.service
-  const databaseRunning = composeContainers(config.databaseProfile.project)
+  const databaseService = config.databaseRuntime.service
+  const databaseRunning = composeContainers(config.databaseRuntime.project)
   if (proxyRunning.includes('proxy')) report(OK, 'proxy', `running in project ${config.infraProject}`)
   else report(BAD, 'proxy', 'not running', 'devkit infra')
 
@@ -95,10 +94,10 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     )
   }
 
-  const profileLabel = `${project.database.engine}:${config.databaseProfile.version}`
+  const databaseLabel = `${project.database.engine}:${config.databaseRuntime.version}`
   if (databaseRunning.includes(databaseService)) {
-    report(OK, project.database.engine, `${profileLabel} running on port ${config[project.database.engine].port}`)
-  } else report(BAD, project.database.engine, `${profileLabel} not running`, 'the next dev start starts it')
+    report(OK, project.database.engine, `${databaseLabel} running in ${config.databaseRuntime.project}`)
+  } else report(BAD, project.database.engine, `${databaseLabel} not running`, 'the next dev start starts it')
   if (!databaseRunning.includes(databaseService)) return 1
 
   const ready = project.database.engine === 'mariadb'
@@ -109,7 +108,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
       BAD,
       project.database.engine,
       'container is up but not accepting queries',
-      `docker compose -p ${config.databaseProfile.project} logs ${databaseService}`
+      `docker compose -p ${config.databaseRuntime.project} logs ${databaseService}`
     )
     return 1
   }
@@ -168,9 +167,6 @@ export async function runDoctor({ repoRoot, log = console.log }) {
       report(WARN, 'project check', `threw: ${error.message}`)
     }
   }
-
-  const siblings = listCheckoutDatabases(config, identity, project)
-  if (siblings.length) log(`\n  ${siblings.length} worktree database(s): ${siblings.join(', ')}`)
 
   log(problems ? '\nOne or more preconditions need attention.\n' : '\nAll preconditions healthy.\n')
   return problems ? 1 : 0

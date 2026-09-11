@@ -1,6 +1,6 @@
 /**
- * Docker access for multi-checkout dev mode: probing the daemon, bringing the shared infra stack
- * up, and running commands inside the selected database container.
+ * Docker access for multi-checkout dev mode: probing the daemon, bringing infrastructure up, and
+ * running commands inside the checkout-owned database container.
  *
  * One deliberate decision shapes everything here: every database client and dump command runs
  * inside its matching container, never on the host. This avoids host packages and client/server
@@ -12,9 +12,6 @@
 import { spawnSync } from 'node:child_process'
 
 /** Postgres service name inside the infra Compose project. */
-export const POSTGRES_SERVICE = 'postgres'
-export const MARIADB_SERVICE = 'mariadb'
-
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', ...options })
 }
@@ -64,44 +61,28 @@ export function composeUp(project, files, { cwd, services = [], env } = {}) {
   return result.status === 0
 }
 
-/** Environment the infra Compose file interpolates. Keep in sync with `infra/compose.yml`. */
+/** Environment the proxy Compose file interpolates. */
 export function infraComposeEnv(config) {
   return {
     DEVKIT_ROUTES_DIR: config.routesDir,
-    DEVKIT_PROXY_PORT: String(config.proxyPort),
-    DEVKIT_POSTGRES_PORT: String(config.postgres.port),
-    DEVKIT_POSTGRES_USER: config.postgres.user,
-    DEVKIT_POSTGRES_PASSWORD: config.postgres.password,
-    DEVKIT_MARIADB_PORT: String(config.mariadb.port),
-    DEVKIT_MARIADB_USER: config.mariadb.user,
-    DEVKIT_MARIADB_PASSWORD: config.mariadb.password,
-    DEVKIT_MARIADB_VOLUME: config.mariadb.volume ?? 'devkit-mariadb',
-    DEVKIT_BASELINE_DIR: config.baselineDir
+    DEVKIT_PROXY_PORT: String(config.proxyPort)
   }
 }
 
-/** Compose invocation for the selected default or versioned database profile. */
+/** Compose invocation for this checkout's database. */
 export function databaseCompose(config) {
-  const profile = config.databaseProfile
-  if (!profile || profile.isDefault) {
-    return {
-      project: config.infraProject,
-      files: [profile?.composeFile ?? `${config.infraDir}/compose.yml`],
-      service: profile?.service ?? POSTGRES_SERVICE,
-      env: infraComposeEnv(config)
-    }
-  }
-  const settings = config[profile.engine]
+  const runtime = config.databaseRuntime
+  if (!runtime) throw new Error('devkit: database runtime has not been selected')
+  const settings = config[runtime.engine]
   return {
-    project: profile.project,
-    files: [profile.composeFile],
-    service: profile.service,
+    project: runtime.project,
+    files: [runtime.composeFile],
+    service: runtime.service,
     env: {
-      DEVKIT_DATABASE_IMAGE: `${profile.engine}:${profile.version}`,
-      DEVKIT_DATABASE_PORT: String(settings.port),
+      DEVKIT_DATABASE_IMAGE: `${runtime.engine}:${runtime.version}`,
       DEVKIT_DATABASE_USER: settings.user,
       DEVKIT_DATABASE_PASSWORD: settings.password,
-      DEVKIT_DATABASE_VOLUME: profile.volume,
+      DEVKIT_DATABASE_VOLUME: runtime.volume,
       DEVKIT_BASELINE_DIR: config.baselineDir
     }
   }
@@ -118,8 +99,36 @@ export function composeContainerId(project, service) {
   return id || null
 }
 
+/** Checkout database volumes belonging to one repository, including stopped Compose projects. */
+export function checkoutDatabaseVolumes(repoName) {
+  const result = run('docker', [
+    'volume', 'ls',
+    '--filter', 'label=com.docker.compose.volume=database',
+    '--format', '{{.Name}}\t{{.Label "com.docker.compose.project"}}'
+  ])
+  if (result.status !== 0) return []
+
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, project] = line.split('\t')
+      return { name, project }
+    })
+    .filter(({ project }) => project === repoName || project.startsWith(`${repoName}-wt-`))
+}
+
+/** Removes one explicitly resolved Docker volume, returning Docker's error when it is still used. */
+export function removeVolume(name) {
+  const result = run('docker', ['volume', 'rm', name])
+  return result.status === 0
+    ? { ok: true }
+    : { ok: false, error: (result.stderr || result.stdout || 'Docker refused the removal').trim() }
+}
+
 /**
- * Runs a shell command inside the shared Postgres container.
+ * Runs a shell command inside the selected Postgres container.
  *
  * `-e PGPASSWORD` is deliberately written WITHOUT a value: that form tells Docker to forward the
  * variable from our own environment, so the password never appears in the `docker` process's argv.
@@ -127,9 +136,9 @@ export function composeContainerId(project, service) {
  * can read it out of `ps`. It is only a throwaway dev credential, but the habit is the point.
  */
 export function postgresExec(config, script, { input } = {}) {
-  const runtime = databaseRuntime(config, 'postgres')
+  const runtime = selectedDatabaseContainer(config, 'postgres')
   const containerId = composeContainerId(runtime.project, runtime.service)
-  if (!containerId) return { ok: false, stderr: 'the shared Postgres container is not running' }
+  if (!containerId) return { ok: false, stderr: 'the checkout Postgres container is not running' }
 
   const result = run(
     'docker',
@@ -155,11 +164,11 @@ export function postgresSql(config, sql, { database = 'postgres' } = {}) {
   return postgresExec(config, `psql -v ON_ERROR_STOP=1 -U ${user} -d ${database} -tAc ${shellQuote(sql)}`)
 }
 
-/** Runs a command inside the shared MariaDB container without exposing its password in argv. */
+/** Runs a command inside the selected MariaDB container without exposing its password in argv. */
 export function mariadbExec(config, script, { input } = {}) {
-  const runtime = databaseRuntime(config, 'mariadb')
+  const runtime = selectedDatabaseContainer(config, 'mariadb')
   const containerId = composeContainerId(runtime.project, runtime.service)
-  if (!containerId) return { ok: false, stderr: 'the shared MariaDB container is not running' }
+  if (!containerId) return { ok: false, stderr: 'the checkout MariaDB container is not running' }
 
   const result = run(
     'docker',
@@ -173,11 +182,10 @@ export function mariadbExec(config, script, { input } = {}) {
   }
 }
 
-function databaseRuntime(config, engine) {
-  const profile = config.databaseProfile
-  return profile?.engine === engine
-    ? { project: profile.project, service: profile.service }
-    : { project: config.infraProject, service: engine }
+function selectedDatabaseContainer(config, engine) {
+  const runtime = config.databaseRuntime
+  if (runtime?.engine !== engine) throw new Error(`devkit: ${engine} is not this checkout's database`)
+  return runtime
 }
 
 /** Runs one MariaDB statement and returns its unheaded, tab-separated output. */

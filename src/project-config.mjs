@@ -30,7 +30,7 @@ const DEFAULTS = {
   name: null,
   /** Named port offsets within this checkout's block, in order. */
   ports: ['web', 'api'],
-  /** Database backend and optional primary database name. Existing projects default to Postgres. */
+  /** Database backend, exact image tag, and optional database name. */
   database: { engine: 'postgres', version: null, name: null },
   /** The migration bookkeeping table, so `doctor` can report how far a database has been migrated. */
   migrationsTable: '_prisma_migrations',

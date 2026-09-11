@@ -1,5 +1,4 @@
-# Shared developer infrastructure: one proxy plus one server for each supported database engine.
-# Started by `devkit bootstrap`; a project's dev start brings up only its selected database service.
+# Shared developer infrastructure: one proxy. Every checkout owns its database container.
 #
 # Deliberately NOT referenced by anything in the repo's own Compose files. In particular there is no
 # `external: true` network anywhere in this design: a missing external network makes `docker compose
@@ -31,50 +30,3 @@ services:
     # this name natively; the explicit host-gateway mapping is what makes it resolve on Linux too.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
-  # One server, one database per checkout. Same major as the devcontainer's `db` service
-  # (.devcontainer/compose.yml) on purpose, so a baseline captured under one restores under the
-  # other and you can move between the two modes without rebuilding your dev data.
-  postgres:
-    image: postgres:16-bookworm
-    restart: always
-    ports:
-      - "127.0.0.1:${DEVKIT_POSTGRES_PORT:-5432}:5432"
-    environment:
-      POSTGRES_USER: ${DEVKIT_POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${DEVKIT_POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: postgres
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DEVKIT_POSTGRES_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    volumes:
-      - devinfra-postgres:/var/lib/postgresql/data
-
-  # MariaDB projects share one server but receive one schema per checkout. This exact stable image
-  # keeps bootstrap reproducible; projects still choose the backend explicitly in devkit.config.mjs.
-  mariadb:
-    image: mariadb:12.3.2
-    restart: always
-    ports:
-      - "127.0.0.1:${DEVKIT_MARIADB_PORT:-3307}:3306"
-    environment:
-      MARIADB_ROOT_PASSWORD: ${DEVKIT_MARIADB_PASSWORD:-root}
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    volumes:
-      - devinfra-mariadb:/var/lib/mysql
-      - ${DEVKIT_BASELINE_DIR:?baseline directory must be set}:/devkit-baselines
-
-volumes:
-  devinfra-postgres:
-    # Named explicitly, and overridable, so the data survives a project rename: the volume is the
-    # only thing here holding state, and a compose project renamed around it would otherwise create
-    # a second empty one and look like every database had vanished.
-    name: ${DEVKIT_POSTGRES_VOLUME:-devkit-postgres}
-  devinfra-mariadb:
-    name: ${DEVKIT_MARIADB_VOLUME:-devkit-mariadb}

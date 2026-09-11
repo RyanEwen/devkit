@@ -29,7 +29,7 @@ import {
 } from './database.mjs'
 import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
 import { databaseCompose, composeUp, infraComposeEnv, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
-import { selectDatabaseProfile } from './database-profile.mjs'
+import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, failedProjectDependencies } from './project-dependencies.mjs'
 import { writeRoute } from './proxy.mjs'
@@ -49,7 +49,7 @@ export class PreflightError extends Error {
  * Ordering matters in one place only: the database must exist before the project applies its
  * migrations, which is why this is called before that step rather than alongside it.
  */
-export async function preflight({ repoRoot, log = console.log, checkDependencies = true }) {
+export async function preflight({ repoRoot, log = console.log, checkDependencies = true, teardown = false }) {
   const hostConfig = devkitConfig()
   if (!hostConfig) return null
 
@@ -57,7 +57,7 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   if (!checkout) return null
 
   const project = await loadProjectConfig(repoRoot)
-  const config = selectDatabaseProfile(hostConfig, project)
+  const config = selectDatabaseRuntime(hostConfig, project, checkout)
   const identity = resolveDatabaseIdentity(checkout, project)
   const ports = checkoutPorts(identity, project.ports)
   const lines = []
@@ -71,42 +71,45 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   const docker = probeDocker()
   if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
 
-  ensureInfra(config, project, log)
-  if (checkDependencies) await requireProjectDependencies(config, project)
-  waitForDatabase(config, project)
+  if (!teardown) {
+    ensureInfra(config, project, log)
+    if (checkDependencies) await requireProjectDependencies(config, project)
+    waitForDatabase(config, project)
 
-  const provisioned = ensureCheckoutDatabase(config, identity, project)
-  if (provisioned.error) throw new PreflightError(`could not create database ${provisioned.name}: ${provisioned.error}`)
-  if (provisioned.created) {
-    lines.push(
-      provisioned.sourced === 'baseline'
-        ? `database ${provisioned.name} cloned from ${provisioned.baseline ?? databaseBaselineLabel(config, identity, project)}`
-        : `database ${provisioned.name} created EMPTY (no baseline yet -- run \`devkit snapshot\` from the primary checkout)`
-    )
-    if (provisioned.warning) lines.push(`baseline clone failed, fell back to empty: ${provisioned.warning}`)
+    const provisioned = ensureCheckoutDatabase(config, identity, project)
+    if (provisioned.error) throw new PreflightError(`could not create database ${provisioned.name}: ${provisioned.error}`)
+    if (provisioned.created) {
+      lines.push(
+        provisioned.sourced === 'baseline'
+          ? `database ${provisioned.name} cloned from ${provisioned.baseline ?? databaseBaselineLabel(config, identity, project)}`
+          : `database ${provisioned.name} created EMPTY (no baseline yet -- run \`devkit snapshot\` from the primary checkout)`
+      )
+      if (provisioned.warning) lines.push(`baseline clone failed, fell back to empty: ${provisioned.warning}`)
+    }
   }
 
   // Only when the project actually seeds files: a project with no `baselinePaths` has nothing on
   // disk to restore, and probing for it would report a missing archive it never wanted.
-  if (project.baselinePaths.length > 0 && checkoutNeedsData(repoRoot)) {
+  if (!teardown && project.baselinePaths.length > 0 && checkoutNeedsData(repoRoot)) {
     const restored = restoreDataBaseline(config, identity, repoRoot)
     if (restored.ok) lines.push(`data/ restored from baseline (${formatBytes(restored.bytes)})`)
     else if (!restored.missing) lines.push(`data/ could not be restored: ${restored.error}`)
   }
 
-  writeRoute(config, identity, ports.web)
+  if (!teardown) writeRoute(config, identity, ports.web)
 
-  const age = project.baselinePaths.length > 0
-    ? baselineAgeDays(config, identity)
-    : databaseBaselineAgeDays(config, identity, project)
+  const age = teardown
+    ? null
+    : project.baselinePaths.length > 0
+      ? baselineAgeDays(config, identity)
+      : databaseBaselineAgeDays(config, identity, project)
   if (age !== null && age > config.baselineMaxAgeDays) {
     lines.push(`baseline is ${Math.floor(age)} days old -- \`devkit snapshot\` refreshes it`)
   }
 
   const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
-  // `checkDependencies: false` is used by project `dev:down` commands. Teardown must not schedule
-  // a fresh browser tab while it removes the route and containers.
-  if (project.browser && checkDependencies) {
+  // Teardown must not schedule a fresh browser tab while it removes the route and containers.
+  if (project.browser && checkDependencies && !teardown) {
     const browser = checkoutBrowserUrls(url, project.browser)
     scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
   }
@@ -128,9 +131,12 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
     ...context,
     config,
     project,
+    compose: databaseCompose(config),
     lines,
     /** Applied-migration count before the project migrates, so a caller can detect a schema move. */
-    migrationsBefore: appliedMigrationCount(config, identity.databaseName, project.migrationsTable, project),
+    migrationsBefore: teardown
+      ? null
+      : appliedMigrationCount(config, identity.databaseName, project.migrationsTable, project),
     env: { ...baseEnv(context), ...project.env(context) }
   }
 }
@@ -194,19 +200,19 @@ function ensureInfra(config, project, log) {
       'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
     )
   }
-  log?.(`[devkit] shared infrastructure ready (${project.database.engine}:${config.databaseProfile.version})`)
+  log?.(`[devkit] proxy and checkout database ready (${project.database.engine}:${config.databaseRuntime.version})`)
 }
 
 /** A container accepts TCP before it accepts queries; poll until a trivial query succeeds. */
-function waitForDatabase(config, project, { attempts = 30, delayMs = 500 } = {}) {
+export function waitForDatabase(config, project, { attempts = 30, delayMs = 500 } = {}) {
   const engine = project.database.engine
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if ((engine === 'mariadb' ? mariadbSql(config, 'select 1') : postgresSql(config, 'select 1')).ok) return
     sleepSync(delayMs)
   }
   throw new PreflightError(
-    `the shared ${engine === 'mariadb' ? 'MariaDB' : 'Postgres'} did not become ready`,
-    `check \`docker compose -p ${config.databaseProfile.project} logs ${config.databaseProfile.service}\``
+    `the checkout ${engine === 'mariadb' ? 'MariaDB' : 'Postgres'} did not become ready`,
+    `check \`docker compose -p ${config.databaseRuntime.project} logs ${config.databaseRuntime.service}\``
   )
 }
 

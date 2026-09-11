@@ -87,39 +87,12 @@ test('on with a marker present, defaulting every path under the config directory
       assert.ok(config)
       assert.equal(config.infraProject, 'devkit-infra')
       assert.equal(config.proxyPort, 80)
-      assert.equal(config.postgres.port, 5432)
-      assert.deepEqual(config.mariadb, {
-        host: '127.0.0.1',
-        port: 3307,
-        user: 'root',
-        password: 'root',
-        volume: 'devkit-mariadb'
-      })
+      assert.deepEqual(config.postgres, { user: 'postgres', password: 'postgres' })
+      assert.deepEqual(config.mariadb, { user: 'root', password: 'root' })
       assert.equal(config.routesDir, path.join(dir, 'devkit', 'routes'))
       assert.equal(config.infraDir, path.join(dir, 'devkit', 'infra'))
     },
     { marker: JSON.stringify({ enabled: true }) }
-  )
-})
-
-test('marker values override the defaults', () => {
-  withConfigHome(
-    () => {
-      const config = devkitConfig({ containerCheck: notInContainer })
-      assert.equal(config.proxyPort, 8080)
-      assert.equal(config.postgres.port, 5555)
-      assert.equal(config.mariadb.port, 3337)
-      assert.equal(config.baselineMaxAgeDays, 3)
-    },
-    {
-      marker: JSON.stringify({
-        enabled: true,
-        proxyPort: 8080,
-        postgres: { port: 5555 },
-        mariadb: { port: 3337 },
-        baselineMaxAgeDays: 3
-      })
-    }
   )
 })
 

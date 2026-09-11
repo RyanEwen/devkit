@@ -12,3 +12,4 @@ export { checkoutIdentity, checkoutPorts, baselineDatabaseName } from './checkou
 export { devkitConfig, devkitConfigDir, devkitMarkerPath } from './config.mjs'
 export { CONFIG_FILENAME, loadProjectConfig } from './project-config.mjs'
 export { inheritWorktreeFiles } from './worktree-files.mjs'
+export { checkoutCompose } from './checkout-compose.mjs'

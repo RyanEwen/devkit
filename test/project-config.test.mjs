@@ -42,7 +42,9 @@ test('a project can select MariaDB and preserve its established primary database
   const config = await withConfig(`export default {
     database: { engine: 'mariadb', name: 'wyliebiz_app' }
   }`)
-  assert.deepEqual(config.database, { engine: 'mariadb', version: null, name: 'wyliebiz_app' })
+  assert.deepEqual(config.database, {
+    engine: 'mariadb', version: null, name: 'wyliebiz_app'
+  })
 })
 
 test('a project can pin an exact database image tag', async () => {

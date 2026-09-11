@@ -29,13 +29,11 @@ export const DEFAULT_BASELINE_PATHS = []
 
 /** One archive per clone, matching the one baseline database per clone. */
 export function baselineArchivePath(config, identity) {
-  return path.join(config.baselineDir, `${identity.repoName}${profileSuffix(config)}-data.tar.gz`)
+  return path.join(config.baselineDir, `${identity.repoName}${runtimeSuffix(config)}-data.tar.gz`)
 }
 
-function profileSuffix(config) {
-  return config.databaseProfile && !config.databaseProfile.isDefault
-    ? `-${config.databaseProfile.key}`
-    : ''
+function runtimeSuffix(config) {
+  return config.databaseRuntime ? `-${config.databaseRuntime.key}` : ''
 }
 
 /**
