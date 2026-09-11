@@ -69,13 +69,17 @@ export default {
   migrationsTable: '_prisma_migrations', // null if the project has no migrations
   baselinePaths: ['data/uploads'],       // repo-relative files a new worktree should start with
   worktreeFiles: ['.env'],               // ignored local config inherited when absent
-  env: ({ ports, url, identity, database }) => ({ // whatever YOUR dev servers read
+  dependencies: [                        // independently started projects required at preflight
+    { name: 'public-api', healthPath: '/api/_health' }
+  ],
+  env: ({ ports, url, identity, database, dependencyOrigins }) => ({ // whatever YOUR dev servers read
     API_PORT: String(ports.api),
     CLIENT_ORIGIN: url,
     DB_HOST: database.host,
     DB_PORT: String(database.port),
     DB_NAME: database.name,
-    VITE_API_PORT: String(ports.api)
+    VITE_API_PORT: String(ports.api),
+    PUBLIC_API_URL: dependencyOrigins['public-api']
   })
 }
 ```
@@ -96,6 +100,12 @@ if (devkit) Object.assign(process.env, devkit.env)   // null when devkit is off
 database, restores its seed data, inherits missing `worktreeFiles` from the primary checkout,
 registers its proxy route, and returns the environment plus the URLs it resolved to. It never
 overwrites a worktree file.
+
+Each `dependencies` entry names another project's primary Devkit hostname. Preflight requires a
+successful response from its `healthPath` (default `/`) and stops with an actionable error if it is
+not available. Dependencies remain separate projects: Devkit never starts or stops them.
+Their proxy origins are available to `env()` in `dependencyOrigins`, including a non-default
+Devkit proxy port when configured.
 
 Projects with the same `engine` and `version` share one local database server, matching deployments
 where several applications use one server. Different versions run concurrently in separate Docker

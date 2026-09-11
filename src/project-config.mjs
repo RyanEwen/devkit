@@ -38,6 +38,8 @@ const DEFAULTS = {
   baselinePaths: [],
   /** Ignored, repo-relative files copied from the primary checkout when a worktree lacks them. */
   worktreeFiles: [],
+  /** Other Devkit projects that must already answer before this project starts. */
+  dependencies: [],
   /** Returns the environment the project's dev servers need. See `preflight.mjs` for the argument. */
   env: () => ({}),
   /**
@@ -80,6 +82,21 @@ function validate(config) {
   if (!Array.isArray(config.baselinePaths)) fail('`baselinePaths` must be an array of repo-relative paths')
   if (!Array.isArray(config.worktreeFiles) || config.worktreeFiles.some((file) => typeof file !== 'string')) {
     fail('`worktreeFiles` must be an array of repo-relative paths')
+  }
+  if (!Array.isArray(config.dependencies)) fail('`dependencies` must be an array')
+  for (const dependency of config.dependencies) {
+    if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) {
+      fail('each `dependencies` entry must be an object with a `name` and optional `healthPath`')
+    }
+    if (typeof dependency.name !== 'string' || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(dependency.name)) {
+      fail('each dependency `name` must be a lowercase hostname label')
+    }
+    if (dependency.healthPath != null && (typeof dependency.healthPath !== 'string' || !dependency.healthPath.startsWith('/'))) {
+      fail('each dependency `healthPath` must start with "/"')
+    }
+  }
+  if (new Set(config.dependencies.map(({ name }) => name)).size !== config.dependencies.length) {
+    fail('`dependencies` must not repeat a project name')
   }
   if (typeof config.env !== 'function') fail('`env` must be a function returning an object')
   if (!Array.isArray(config.checks) || config.checks.some((check) => typeof check !== 'function')) {

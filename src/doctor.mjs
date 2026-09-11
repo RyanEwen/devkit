@@ -26,6 +26,7 @@ import { baselineAgeDays, baselineArchivePath, checkoutNeedsData } from './data-
 import { composeContainers, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
 import { selectDatabaseProfile } from './database-profile.mjs'
 import { loadProjectConfig } from './project-config.mjs'
+import { dependencyOrigins, probeProjectDependencies } from './project-dependencies.mjs'
 import { routeFilePath } from './proxy.mjs'
 
 const OK = '+'
@@ -84,6 +85,16 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   const databaseRunning = composeContainers(config.databaseProfile.project)
   if (proxyRunning.includes('proxy')) report(OK, 'proxy', `running in project ${config.infraProject}`)
   else report(BAD, 'proxy', 'not running', 'devkit infra')
+
+  for (const result of await probeProjectDependencies(project.dependencies, { proxyPort: config.proxyPort })) {
+    report(
+      result.ok ? OK : BAD,
+      `needs ${result.dependency.name}`,
+      `${result.url} (${result.detail})`,
+      result.ok ? null : `start ${result.dependency.name} independently`
+    )
+  }
+
   const profileLabel = `${project.database.engine}:${config.databaseProfile.version}`
   if (databaseRunning.includes(databaseService)) {
     report(OK, project.database.engine, `${profileLabel} running on port ${config[project.database.engine].port}`)
@@ -146,6 +157,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     config,
     database,
     url: `http://${identity.hostname}`,
+    dependencyOrigins: dependencyOrigins(project.dependencies, config.proxyPort),
     repoRoot
   }
   for (const check of project.checks ?? []) {

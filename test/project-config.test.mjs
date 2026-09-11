@@ -19,6 +19,7 @@ test('a project with no config gets defaults rather than an error', async () => 
   assert.deepEqual(config.database, { engine: 'postgres', version: null, name: null })
   assert.deepEqual(config.baselinePaths, [])
   assert.deepEqual(config.worktreeFiles, [])
+  assert.deepEqual(config.dependencies, [])
   assert.equal(config.configPath, null)
   assert.deepEqual(config.env({}), {})
 })
@@ -70,6 +71,11 @@ test('a malformed config is rejected with a message naming the field', async () 
   await assert.rejects(withConfig('export default { env: 42 }'), /`env` must be a function/)
   await assert.rejects(withConfig('export default { checks: [1] }'), /`checks` must be an array of functions/)
   await assert.rejects(withConfig('export default { worktreeFiles: ".env" }'), /`worktreeFiles` must be an array/)
+  await assert.rejects(withConfig('export default { dependencies: "api" }'), /`dependencies` must be an array/)
+  await assert.rejects(withConfig('export default { dependencies: ["api"] }'), /entry must be an object/)
+  await assert.rejects(withConfig('export default { dependencies: [{ name: "Public API" }] }'), /lowercase hostname label/)
+  await assert.rejects(withConfig('export default { dependencies: [{ name: "api", healthPath: "health" }] }'), /must start with/)
+  await assert.rejects(withConfig('export default { dependencies: [{ name: "api" }, { name: "api" }] }'), /must not repeat/)
   await assert.rejects(withConfig('export default { database: "mariadb" }'), /`database` must be an object/)
   await assert.rejects(withConfig('export default { database: { engine: "sqlite" } }'), /`database.engine`/)
   await assert.rejects(withConfig('export default { database: { name: "bad-name" } }'), /`database.name`/)
@@ -81,4 +87,11 @@ test('a malformed config is rejected with a message naming the field', async () 
 test('a project with no migrations may say so with null', async () => {
   const config = await withConfig('export default { migrationsTable: null }')
   assert.equal(config.migrationsTable, null)
+})
+
+test('a project can declare independently managed runtime dependencies', async () => {
+  const config = await withConfig(`export default {
+    dependencies: [{ name: 'public-api', healthPath: '/api/_health' }]
+  }`)
+  assert.deepEqual(config.dependencies, [{ name: 'public-api', healthPath: '/api/_health' }])
 })

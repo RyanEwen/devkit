@@ -30,6 +30,7 @@ import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBas
 import { databaseCompose, composeUp, infraComposeEnv, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
 import { selectDatabaseProfile } from './database-profile.mjs'
 import { loadProjectConfig } from './project-config.mjs'
+import { dependencyOrigins, failedProjectDependencies } from './project-dependencies.mjs'
 import { writeRoute } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
 
@@ -47,7 +48,7 @@ export class PreflightError extends Error {
  * Ordering matters in one place only: the database must exist before the project applies its
  * migrations, which is why this is called before that step rather than alongside it.
  */
-export async function preflight({ repoRoot, log = console.log }) {
+export async function preflight({ repoRoot, log = console.log, checkDependencies = true }) {
   const hostConfig = devkitConfig()
   if (!hostConfig) return null
 
@@ -70,6 +71,7 @@ export async function preflight({ repoRoot, log = console.log }) {
   if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
 
   ensureInfra(config, project, log)
+  if (checkDependencies) await requireProjectDependencies(config, project)
   waitForDatabase(config, project)
 
   const provisioned = ensureCheckoutDatabase(config, identity, project)
@@ -111,6 +113,7 @@ export async function preflight({ repoRoot, log = console.log }) {
     directUrl: `http://localhost:${ports.web}`,
     database,
     databaseUrl,
+    dependencyOrigins: dependencyOrigins(project.dependencies, config.proxyPort),
     configDir: config.configDir
   }
 
@@ -123,6 +126,19 @@ export async function preflight({ repoRoot, log = console.log }) {
     migrationsBefore: appliedMigrationCount(config, identity.databaseName, project.migrationsTable, project),
     env: { ...baseEnv(context), ...project.env(context) }
   }
+}
+
+/** Verifies declared applications are alive but deliberately never starts or manages them. */
+async function requireProjectDependencies(config, project) {
+  const failures = await failedProjectDependencies(project.dependencies, { proxyPort: config.proxyPort })
+  if (failures.length === 0) return
+
+  const failed = failures.map(({ dependency, url, detail }) => `${dependency.name} at ${url} (${detail})`).join(', ')
+  const names = failures.map(({ dependency }) => dependency.name).join(', ')
+  throw new PreflightError(
+    `required Devkit project${failures.length === 1 ? '' : 's'} not running: ${failed}`,
+    `start ${names} independently, then run this project again`
+  )
 }
 
 /**
