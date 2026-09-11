@@ -104,7 +104,9 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   }
 
   const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
-  if (project.browser) {
+  // `checkDependencies: false` is used by project `dev:down` commands. Teardown must not schedule
+  // a fresh browser tab while it removes the route and containers.
+  if (project.browser && checkDependencies) {
     const browser = checkoutBrowserUrls(url, project.browser)
     scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
   }
