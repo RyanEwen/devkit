@@ -121,14 +121,15 @@ function bootstrap() {
 
   if (!composeUp(config.infraProject, [path.join(infraDir, 'compose.yml')], {
     cwd: infraDir,
-    env: infraComposeEnv(config)
+    env: infraComposeEnv(config),
+    services: ['proxy']
   })) {
     fail(
       'the shared infrastructure could not be started',
       `Inspect it with: docker compose -p ${config.infraProject} -f ${path.join(infraDir, 'compose.yml')} logs`
     )
   }
-  console.log('  + proxy, postgres, and mariadb running')
+  console.log('  + proxy running; project database profiles start on demand')
 
   linkOntoPath('devkit')
   linkOntoPath('devproxy')
@@ -319,7 +320,7 @@ switch (command) {
     console.log(`devkit gives every checkout and worktree on this machine its own *.localhost
 hostname, its own database and its own ports, all derived from its path.
 
-  devkit bootstrap    once per machine: install or upgrade the shared proxy + databases
+  devkit bootstrap    once per machine: install or upgrade the proxy + database definitions
   devkit doctor       the state of every precondition, and the command that fixes each
   devkit snapshot     capture this checkout's dev data as the baseline new ones clone
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)

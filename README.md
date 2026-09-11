@@ -38,10 +38,11 @@ npm install --save-dev github:RyanEwen/devkit
 npx devkit bootstrap        # once per machine
 ```
 
-`bootstrap` installs or upgrades the managed shared-stack files, starts the services, writes the
-marker that switches devkit on, and links `devkit` and `devproxy` onto your PATH. Re-run it after a
-Devkit upgrade that adds infrastructure. A changed managed file is retained beside the replacement
-with a `.previous` suffix.
+`bootstrap` installs or upgrades the managed shared-stack files, starts the proxy, writes the marker
+that switches devkit on, and links `devkit` and `devproxy` onto your PATH. Database profiles start
+on demand when a project selects them. Re-run bootstrap after a Devkit upgrade that adds
+infrastructure. A changed managed file is retained beside the replacement with a `.previous`
+suffix.
 
 ## Off unless you turn it on
 
