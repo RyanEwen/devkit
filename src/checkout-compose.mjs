@@ -24,6 +24,7 @@ export function checkoutCompose(state, { files = [], env = {}, projectDirectory 
   return {
     command: 'docker',
     args,
+    cwd: projectDirectory,
     env: {
       ...process.env,
       ...state.compose.env,

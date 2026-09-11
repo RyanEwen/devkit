@@ -18,6 +18,7 @@ test('checkout Compose combines the database and application definitions under o
   })
 
   assert.equal(invocation.command, 'docker')
+  assert.equal(invocation.cwd, '/workspace')
   assert.deepEqual(invocation.args, [
     'compose', '--env-file', '/dev/null', '--project-directory', '/workspace',
     '-p', 'app-wt-fix-login',

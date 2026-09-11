@@ -56,7 +56,11 @@ The host runner combines the Devkit database definition with the project's `comp
 
 ```js
 import path from 'node:path'
-import { checkoutCompose, preflight } from '@ryanewen/devkit'
+import {
+  checkoutCompose,
+  checkoutComposeLifecycle,
+  preflight
+} from '@ryanewen/devkit'
 
 const state = await preflight({ repoRoot })
 const invocation = checkoutCompose(state, {
@@ -68,10 +72,16 @@ const invocation = checkoutCompose(state, {
     HOST_GID: String(process.getgid?.() ?? 1000)
   }
 })
+const lifecycle = checkoutComposeLifecycle(state, invocation)
+
+if (process.argv.includes('--down')) process.exit(lifecycle.stop())
+process.exit(await lifecycle.run(['up', '--remove-orphans']))
 ```
 
-Spawn `invocation.command` with `invocation.args` plus `up`; use `invocation.env`. Pass
-`teardown: true` to preflight for a `down` path so stopping a checkout does not start it first.
+The lifecycle relays termination signals, removes the route, and tears down the whole checkout
+stack while preserving named volumes. Pass `profiles` when profiled services also belong to the
+stack. Pass `teardown: true` to preflight for a `down` path so stopping a checkout does not start
+it first.
 
 ## Data and worktrees
 
