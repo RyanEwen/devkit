@@ -60,6 +60,17 @@ test('VS Code Server browser helper is resolved from terminal environment', () =
   })
 })
 
+test('VS Code Server browser helper uses the askpass runtime available in integrated terminals', () => {
+  const env = {
+    VSCODE_IPC_HOOK_CLI: '/run/user/1000/vscode-ipc.sock',
+    VSCODE_GIT_ASKPASS_NODE: '/home/me/.vscode-server/bin/commit/node'
+  }
+  assert.equal(
+    vsCodeBrowserHelper(env, { existsSyncImpl: () => true }),
+    '/home/me/.vscode-server/bin/commit/bin/helpers/browser.sh'
+  )
+})
+
 test('DEVKIT_OPEN_BROWSER=0 suppresses the detached opener', () => {
   let spawned = false
   assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/', {

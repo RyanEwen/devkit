@@ -37,6 +37,11 @@ export function vsCodeBrowserHelper(env = process.env, { existsSyncImpl = exists
   if (!env.VSCODE_IPC_HOOK_CLI) return null
   if (env.BROWSER && existsSyncImpl(env.BROWSER)) return env.BROWSER
 
+  if (env.VSCODE_GIT_ASKPASS_NODE) {
+    const helper = path.join(path.dirname(env.VSCODE_GIT_ASKPASS_NODE), 'bin/helpers/browser.sh')
+    if (existsSyncImpl(helper)) return helper
+  }
+
   try {
     const messagesFile = JSON.parse(env.VSCODE_NLS_CONFIG ?? '{}').defaultMessagesFile
     if (!messagesFile) return null
