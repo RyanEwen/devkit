@@ -110,8 +110,9 @@ An `install` declaration makes the first preflight replace a missing, stale, or 
 dependency tree with a checkout-local install. Devkit fingerprints the declared inputs, command,
 Node runtime, and invoking npm identity. Before installing, it moves any existing stale tree aside
 so npm cannot traverse borrowed links into a read-only checkout; a failed replacement restores the
-original tree. This lets a worktree start with shared dependencies while still guaranteeing that
-source-mounted containers receive a real local directory.
+original tree. Devkit adds the short-lived backup pattern to Git's local exclude file automatically,
+so projects do not need to commit a tool-specific ignore rule. This lets a worktree start with shared
+dependencies while still guaranteeing that source-mounted containers receive a real local directory.
 
 Host-side tools that need only the database can call `prepareDatabase({ repoRoot })`. It installs
 declared checkout dependencies, starts and provisions the database, and returns its loopback URL

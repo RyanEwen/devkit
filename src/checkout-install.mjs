@@ -10,8 +10,10 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
+  appendFileSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -20,6 +22,7 @@ import {
 import path from 'node:path'
 
 const MARKER_NAME = '.devkit-install.json'
+const BACKUP_GLOB_SUFFIX = '.devkit-backup-*'
 
 /** Runs the declared install command only when its checkout-local output is absent or stale. */
 export function ensureCheckoutInstall({
@@ -33,6 +36,7 @@ export function ensureCheckoutInstall({
   if (!install) return { installed: false }
 
   const outputPath = path.join(repoRoot, install.output)
+  ensureInstallBackupIgnored(repoRoot, install.output)
   const expectedFingerprint = installFingerprint({
     repoRoot,
     install,
@@ -68,6 +72,48 @@ export function ensureCheckoutInstall({
     if (hadOutput && pathEntryExists(backupPath)) renameSync(backupPath, outputPath)
     throw error
   }
+}
+
+/**
+ * Keeps Devkit's short-lived transactional backup out of Git status without requiring projects to
+ * commit a tool-specific ignore rule. Linked worktrees share the repository's local exclude file.
+ */
+export function ensureInstallBackupIgnored(repoRoot, output) {
+  try {
+    const excludePath = gitExcludePath(repoRoot)
+    if (!excludePath) return false
+
+    const pattern = `/${output.replaceAll(path.sep, '/')}${BACKUP_GLOB_SUFFIX}`
+    const existing = existsSync(excludePath) ? readFileSync(excludePath, 'utf8') : ''
+    if (existing.split(/\r?\n/u).includes(pattern)) return false
+
+    mkdirSync(path.dirname(excludePath), { recursive: true })
+    const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+    appendFileSync(excludePath, `${separator}# Devkit transactional dependency backup\n${pattern}\n`)
+    return true
+  } catch {
+    // An agent sandbox may expose project files while making Git metadata read-only. The ignore is
+    // cosmetic, so that restriction must never prevent Devkit from repairing the actual install.
+    return false
+  }
+}
+
+/** Resolves the repository-local exclude file for both normal and linked worktrees. */
+function gitExcludePath(repoRoot) {
+  const dotGit = path.join(repoRoot, '.git')
+  if (pathEntryExists(dotGit) && lstatSync(dotGit).isDirectory()) {
+    return path.join(dotGit, 'info', 'exclude')
+  }
+
+  const result = spawnSync('git', ['rev-parse', '--git-path', 'info/exclude'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    shell: process.platform === 'win32'
+  })
+  if (result.status !== 0) return null
+
+  const resolved = result.stdout.trim()
+  return resolved ? path.resolve(repoRoot, resolved) : null
 }
 
 /** Checks for a directory entry without following a possibly broken symlink. */

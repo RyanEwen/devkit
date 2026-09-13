@@ -13,7 +13,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, test } from 'node:test'
 
-import { ensureCheckoutInstall, installFingerprint } from '../src/checkout-install.mjs'
+import {
+  ensureCheckoutInstall,
+  ensureInstallBackupIgnored,
+  installFingerprint
+} from '../src/checkout-install.mjs'
 
 const sandboxes = []
 afterEach(() => {
@@ -27,6 +31,20 @@ function checkout() {
   writeFileSync(path.join(repoRoot, '.nvmrc'), '22.22.3\n')
   return repoRoot
 }
+
+test('transactional dependency backups are locally ignored without changing project files', () => {
+  const repoRoot = checkout()
+  const excludePath = path.join(repoRoot, '.git', 'info', 'exclude')
+  mkdirSync(path.dirname(excludePath), { recursive: true })
+  writeFileSync(excludePath, '# existing local excludes\n')
+
+  assert.equal(ensureInstallBackupIgnored(repoRoot, 'node_modules'), true)
+  assert.equal(ensureInstallBackupIgnored(repoRoot, 'node_modules'), false)
+  assert.equal(
+    readFileSync(excludePath, 'utf8'),
+    '# existing local excludes\n# Devkit transactional dependency backup\n/node_modules.devkit-backup-*\n'
+  )
+})
 
 const project = {
   install: {
