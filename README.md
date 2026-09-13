@@ -92,6 +92,10 @@ stack while preserving named volumes. Pass `profiles` when profiled services als
 stack. Pass `teardown: true` to preflight for a `down` path so stopping a checkout does not start
 it first.
 
+When development starts from VS Code or one of its agent processes, Devkit opens the configured
+URL in VS Code's integrated browser. Other terminals use the operating system browser. Set
+`DEVKIT_OPEN_BROWSER=0` to suppress automatic opening entirely.
+
 ## Data and worktrees
 
 Every checkout gets one private PostgreSQL or MariaDB server at `database:5432` or

@@ -23,7 +23,10 @@ export function checkoutBrowserUrls(origin, browser) {
 }
 
 export function isVsCodeTerminal(env = process.env) {
-  return env.TERM_PROGRAM === 'vscode' || Boolean(env.VSCODE_IPC_HOOK_CLI)
+  return env.TERM_PROGRAM === 'vscode'
+    || Boolean(env.VSCODE_IPC_HOOK_CLI)
+    || Boolean(env.VSCODE_GIT_ASKPASS_NODE)
+    || Boolean(env.VSCODE_NLS_CONFIG)
 }
 
 /** Starts a detached waiter so preflight never delays the project's actual server process. */
@@ -42,7 +45,7 @@ export function scheduleBrowserOpen(openUrl, healthUrl, { spawnImpl = spawn, env
 
 /** Finds VS Code Server's native URL bridge from the environment inherited by its terminal. */
 export function vsCodeBrowserHelper(env = process.env, { existsSyncImpl = existsSync } = {}) {
-  if (!env.VSCODE_IPC_HOOK_CLI) return null
+  if (!isVsCodeTerminal(env)) return null
   if (env.BROWSER && existsSyncImpl(env.BROWSER)) return env.BROWSER
 
   if (env.VSCODE_GIT_ASKPASS_NODE) {

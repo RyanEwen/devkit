@@ -41,6 +41,7 @@ test('browser commands use the native host opener', () => {
 test('VS Code terminals are detected from local and remote environment markers', () => {
   assert.equal(isVsCodeTerminal({ TERM_PROGRAM: 'vscode' }), true)
   assert.equal(isVsCodeTerminal({ VSCODE_IPC_HOOK_CLI: '/tmp/vscode-ipc.sock' }), true)
+  assert.equal(isVsCodeTerminal({ VSCODE_NLS_CONFIG: '{"defaultMessagesFile":"/tmp/messages.json"}' }), true)
   assert.equal(isVsCodeTerminal({ TERM_PROGRAM: 'other' }), false)
 })
 
@@ -62,6 +63,18 @@ test('VS Code Server browser helper is resolved from terminal environment', () =
     command: '/home/me/.vscode-server/bin/commit/bin/helpers/browser.sh',
     args: ['http://app.localhost/']
   })
+})
+
+test('VS Code Server browser helper survives agent processes without the IPC hook', () => {
+  const env = {
+    VSCODE_NLS_CONFIG: JSON.stringify({
+      defaultMessagesFile: '/home/me/.vscode-server/bin/commit/out/nls.messages.json'
+    })
+  }
+  assert.equal(
+    vsCodeBrowserHelper(env, { existsSyncImpl: () => true }),
+    '/home/me/.vscode-server/bin/commit/bin/helpers/browser.sh'
+  )
 })
 
 test('VS Code Server browser helper uses the askpass runtime available in integrated terminals', () => {
