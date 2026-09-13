@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -72,6 +81,30 @@ test('an external symlink is replaced with a local install', () => {
   assert.throws(() => readlinkSync(path.join(repoRoot, 'node_modules')))
 })
 
+test('a directory containing borrowed symlinks is moved before installation', () => {
+  const repoRoot = checkout()
+  const outputPath = path.join(repoRoot, 'node_modules')
+  const external = mkdtempSync(path.join(os.tmpdir(), 'devkit-external-install-'))
+  sandboxes.push(external)
+  mkdirSync(outputPath)
+  writeFileSync(path.join(external, 'package.json'), '{}\n')
+  symlinkSync(path.join(external, 'package.json'), path.join(outputPath, 'package.json'))
+
+  const result = ensureCheckoutInstall({
+    repoRoot,
+    project,
+    run: (_command, _args, root) => {
+      assert.equal(existsSync(path.join(root, 'node_modules')), false)
+      mkdirSync(path.join(root, 'node_modules'))
+      return { status: 0 }
+    }
+  })
+
+  assert.deepEqual(result, { installed: true })
+  assert.equal(existsSync(path.join(external, 'package.json')), true)
+  assert.equal(existsSync(path.join(outputPath, 'package.json')), false)
+})
+
 test('a failed install restores the external symlink and removes partial output', () => {
   const repoRoot = checkout()
   const external = mkdtempSync(path.join(os.tmpdir(), 'devkit-external-install-'))
@@ -83,6 +116,19 @@ test('a failed install restores the external symlink and removes partial output'
     /npm ci exited with status 1/
   )
   assert.equal(readlinkSync(path.join(repoRoot, 'node_modules')), external)
+})
+
+test('a failed install restores an existing local dependency tree', () => {
+  const repoRoot = checkout()
+  const outputPath = path.join(repoRoot, 'node_modules')
+  mkdirSync(outputPath)
+  writeFileSync(path.join(outputPath, 'sentinel'), 'original\n')
+
+  assert.throws(
+    () => ensureCheckoutInstall({ repoRoot, project, run: fakeInstall(1) }),
+    /npm ci exited with status 1/
+  )
+  assert.equal(readFileSync(path.join(outputPath, 'sentinel'), 'utf8'), 'original\n')
 })
 
 test('a changed input or runtime refreshes the install', () => {

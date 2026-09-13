@@ -1,10 +1,11 @@
 /**
  * Materializes a checkout-local dependency directory from a project-declared install command.
  *
- * Worktree tools may seed `node_modules` with a symlink to another checkout. That is useful for
- * immediately loading Devkit, but a source-mounted container cannot follow the link outside its
- * checkout. Devkit therefore replaces stale or linked installs transactionally and records the
- * inputs/runtime that produced the local directory. A failed install restores an original link.
+ * Worktree tools may seed `node_modules` with either a directory symlink or a directory whose files
+ * are symlinks to another checkout. That is useful for immediately loading Devkit, but npm and a
+ * source-mounted container cannot safely use those links outside the checkout. Devkit therefore
+ * replaces stale installs transactionally and records the inputs/runtime that produced the local
+ * directory. A failed install restores the original dependency tree.
  */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -14,7 +15,6 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  unlinkSync,
   writeFileSync
 } from 'node:fs'
 import path from 'node:path'
@@ -41,9 +41,9 @@ export function ensureCheckoutInstall({
   })
   if (localInstallMatches(outputPath, expectedFingerprint)) return { installed: false }
 
-  const linkBackupPath = `${outputPath}.devkit-link-backup-${process.pid}`
-  const hadSymlink = existsSync(outputPath) && lstatSync(outputPath).isSymbolicLink()
-  if (hadSymlink) renameSync(outputPath, linkBackupPath)
+  const backupPath = `${outputPath}.devkit-backup-${process.pid}`
+  const hadOutput = pathEntryExists(outputPath)
+  if (hadOutput) renameSync(outputPath, backupPath)
 
   try {
     const result = run(install.command[0], install.command.slice(1), repoRoot)
@@ -59,13 +59,24 @@ export function ensureCheckoutInstall({
       path.join(outputPath, MARKER_NAME),
       `${JSON.stringify({ fingerprint: expectedFingerprint })}\n`
     )
-    if (hadSymlink) unlinkSync(linkBackupPath)
+    if (hadOutput) rmSync(backupPath, { recursive: true, force: true })
     return { installed: true }
   } catch (error) {
-    // Remove only the declared output before restoring the link moved above. Its external target is
-    // never traversed or changed, so a failed setup leaves the worktree as usable as it began.
+    // Remove only the partial replacement before restoring the original tree. Renaming the tree
+    // before npm starts prevents npm from traversing borrowed links into a read-only checkout.
     rmSync(outputPath, { recursive: true, force: true })
-    if (hadSymlink && existsSync(linkBackupPath)) renameSync(linkBackupPath, outputPath)
+    if (hadOutput && pathEntryExists(backupPath)) renameSync(backupPath, outputPath)
+    throw error
+  }
+}
+
+/** Checks for a directory entry without following a possibly broken symlink. */
+function pathEntryExists(entryPath) {
+  try {
+    lstatSync(entryPath)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
     throw error
   }
 }

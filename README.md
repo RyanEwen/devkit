@@ -106,11 +106,12 @@ worktree restores that dump before the project applies its migrations. `baseline
 checkout-local files with the same baseline, and `worktreeFiles` copies allowlisted ignored config
 from the primary checkout only when missing.
 
-An `install` declaration makes the first preflight replace a missing, stale, or externally
-symlinked dependency directory with a checkout-local install. Devkit fingerprints the declared
-inputs, command, Node runtime, and invoking npm identity. If replacement of a symlink fails, the
-original link is restored. This lets a worktree start with a shared dependency link while still
-guaranteeing that source-mounted containers receive a real local directory.
+An `install` declaration makes the first preflight replace a missing, stale, or externally linked
+dependency tree with a checkout-local install. Devkit fingerprints the declared inputs, command,
+Node runtime, and invoking npm identity. Before installing, it moves any existing stale tree aside
+so npm cannot traverse borrowed links into a read-only checkout; a failed replacement restores the
+original tree. This lets a worktree start with shared dependencies while still guaranteeing that
+source-mounted containers receive a real local directory.
 
 Host-side tools that need only the database can call `prepareDatabase({ repoRoot })`. It installs
 declared checkout dependencies, starts and provisions the database, and returns its loopback URL
