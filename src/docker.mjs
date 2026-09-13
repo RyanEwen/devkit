@@ -10,6 +10,9 @@
  * any of this infrastructure never reaches a Docker call. See `config.mjs`.
  */
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+const DATABASE_HOST_COMPOSE = fileURLToPath(new URL('../infra/database-host.yml', import.meta.url))
 
 /** Postgres service name inside the infra Compose project. */
 function run(command, args, options = {}) {
@@ -76,14 +79,23 @@ export function databaseCompose(config) {
   const settings = config[runtime.engine]
   return {
     project: runtime.project,
-    files: [runtime.composeFile],
+    files: [
+      runtime.composeFile,
+      ...(runtime.hostPort ? [DATABASE_HOST_COMPOSE] : [])
+    ],
     service: runtime.service,
     env: {
       DEVKIT_DATABASE_IMAGE: `${runtime.engine}:${runtime.version}`,
       DEVKIT_DATABASE_USER: settings.user,
       DEVKIT_DATABASE_PASSWORD: settings.password,
       DEVKIT_DATABASE_VOLUME: runtime.volume,
-      DEVKIT_BASELINE_DIR: config.baselineDir
+      DEVKIT_BASELINE_DIR: config.baselineDir,
+      ...(runtime.hostPort
+        ? {
+            DEVKIT_DATABASE_HOST_PORT: String(runtime.hostPort),
+            DEVKIT_DATABASE_INTERNAL_PORT: runtime.engine === 'mariadb' ? '3306' : '5432'
+          }
+        : {})
     }
   }
 }

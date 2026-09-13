@@ -25,7 +25,7 @@ test('a checkout database gets an exact image and only its engine credentials', 
     databaseRuntime: {
       engine: 'mariadb', version: '10.2',
       project: 'app-wt-issue', service: 'database',
-      composeFile: '/config/infra/mariadb.yml', volume: 'app-wt-issue-database'
+      composeFile: '/config/infra/mariadb.yml', volume: 'app-wt-issue-database', hostPort: null
     }
   })
   assert.equal(runtime.project, 'app-wt-issue')
@@ -44,13 +44,29 @@ test('a checkout database has no published port and uses the checkout-owned volu
     databaseRuntime: {
       engine: 'postgres', version: '16.13-bookworm',
       project: 'platform-wt-report', service: 'database',
-      composeFile: '/config/infra/postgres.yml', volume: 'platform-wt-report-database'
+      composeFile: '/config/infra/postgres.yml', volume: 'platform-wt-report-database', hostPort: null
     }
   })
   assert.equal(runtime.project, 'platform-wt-report')
   assert.equal(runtime.env.DEVKIT_DATABASE_IMAGE, 'postgres:16.13-bookworm')
   assert.equal(runtime.env.DEVKIT_DATABASE_VOLUME, 'platform-wt-report-database')
   assert.equal(runtime.env.DEVKIT_DATABASE_PORT, undefined)
+})
+
+test('opt-in host access adds a loopback publishing overlay', () => {
+  const runtime = databaseCompose({
+    infraDir: '/config/infra',
+    baselineDir: '/config/baselines',
+    postgres: { host: 'database', port: 5432, user: 'postgres', password: 'secret' },
+    databaseRuntime: {
+      engine: 'postgres', version: '16.13-bookworm', project: 'platform', service: 'database',
+      composeFile: '/config/infra/postgres.yml', volume: 'platform-database', hostPort: 20009
+    }
+  })
+  assert.equal(runtime.files[0], '/config/infra/postgres.yml')
+  assert.match(runtime.files[1], /\/infra\/database-host\.yml$/)
+  assert.equal(runtime.env.DEVKIT_DATABASE_HOST_PORT, '20009')
+  assert.equal(runtime.env.DEVKIT_DATABASE_INTERNAL_PORT, '5432')
 })
 
 test('MariaDB checkouts keep the established server behavior', () => {

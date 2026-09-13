@@ -1,0 +1,6 @@
+# Optional loopback-only database access for host-side project tools. The project must opt in with
+# `database.hostAccess`; ordinary application traffic remains on the private Compose network.
+services:
+  database:
+    ports:
+      - "127.0.0.1:${DEVKIT_DATABASE_HOST_PORT:?host database port is required}:${DEVKIT_DATABASE_INTERNAL_PORT:?container database port is required}"

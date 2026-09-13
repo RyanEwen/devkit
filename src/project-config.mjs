@@ -31,13 +31,15 @@ const DEFAULTS = {
   /** Named port offsets within this checkout's block, in order. */
   ports: ['web', 'api'],
   /** Database backend, exact image tag, and optional database name. */
-  database: { engine: 'postgres', version: null, name: null },
+  database: { engine: 'postgres', version: null, name: null, hostAccess: false },
   /** The migration bookkeeping table, so `doctor` can report how far a database has been migrated. */
   migrationsTable: '_prisma_migrations',
   /** Repo-relative paths captured alongside the database so a new worktree starts usable. */
   baselinePaths: [],
   /** Ignored, repo-relative files copied from the primary checkout when a worktree lacks them. */
   worktreeFiles: [],
+  /** Optional checkout-local dependency install, repaired before development infrastructure starts. */
+  install: null,
   /** Other Devkit projects that must already answer before this project starts. */
   dependencies: [],
   /** Browser destination to open once this checkout answers, or null to leave the browser alone. */
@@ -78,6 +80,12 @@ function validate(config) {
   if (config.database.name != null && !/^[a-z0-9_]+$/.test(config.database.name)) {
     fail('`database.name` must contain only lowercase letters, numbers, and underscores')
   }
+  if (typeof config.database.hostAccess !== 'boolean') {
+    fail('`database.hostAccess` must be a boolean')
+  }
+  if (config.database.hostAccess && config.ports.length >= 10) {
+    fail('`database.hostAccess` reserves the last port in a checkout block, so `ports` may contain at most 9 names')
+  }
   if (config.migrationsTable != null && typeof config.migrationsTable !== 'string') {
     fail('`migrationsTable` must be a string, or null for a project with no migrations')
   }
@@ -85,6 +93,7 @@ function validate(config) {
   if (!Array.isArray(config.worktreeFiles) || config.worktreeFiles.some((file) => typeof file !== 'string')) {
     fail('`worktreeFiles` must be an array of repo-relative paths')
   }
+  if (config.install != null) validateInstall(config.install)
   if (!Array.isArray(config.dependencies)) fail('`dependencies` must be an array')
   for (const dependency of config.dependencies) {
     if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) {
@@ -118,6 +127,29 @@ function validate(config) {
     fail('`checks` must be an array of functions')
   }
   return config
+}
+
+/** Validates the narrow, package-manager-agnostic checkout install declaration. */
+function validateInstall(install) {
+  if (!install || typeof install !== 'object' || Array.isArray(install)) {
+    fail('`install` must be an object, or null')
+  }
+  if (!Array.isArray(install.command) || install.command.length === 0 || install.command.some((part) => typeof part !== 'string' || !part)) {
+    fail('`install.command` must be a non-empty array, e.g. ["npm", "ci"]')
+  }
+  if (!Array.isArray(install.inputs) || install.inputs.length === 0 || install.inputs.some((input) => !isRepoRelativePath(input))) {
+    fail('`install.inputs` must be a non-empty array of repo-relative paths')
+  }
+  if (!isRepoRelativePath(install.output)) {
+    fail('`install.output` must be a repo-relative path')
+  }
+}
+
+function isRepoRelativePath(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && !path.isAbsolute(value)
+    && !value.split(/[\\/]/).includes('..')
 }
 
 /**

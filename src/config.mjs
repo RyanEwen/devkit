@@ -116,3 +116,17 @@ export function checkoutDatabase(config, databaseName, engine = 'postgres') {
     url: checkoutConnectionUrl(config, databaseName, engine)
   }
 }
+
+/** Loopback connection descriptor for a checkout whose project opted into host database access. */
+export function checkoutHostDatabase(config, databaseName, engine = 'postgres') {
+  const hostPort = config.databaseRuntime?.hostPort
+  if (!hostPort) return null
+  const settings = { ...config[engine], host: '127.0.0.1', port: hostPort }
+  return {
+    engine,
+    version: config.databaseRuntime.version,
+    name: databaseName,
+    ...settings,
+    url: checkoutConnectionUrl({ ...config, [engine]: settings }, databaseName, engine)
+  }
+}

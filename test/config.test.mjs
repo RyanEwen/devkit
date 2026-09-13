@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { checkoutConnectionUrl, checkoutDatabase, devkitConfig } from '../src/config.mjs'
+import { checkoutConnectionUrl, checkoutDatabase, checkoutHostDatabase, devkitConfig } from '../src/config.mjs'
 
 /**
  * These pin the OFF switches rather than the settings, because the promise that matters is the one
@@ -117,5 +117,22 @@ test('connection URLs use the selected backend and encode credentials', () => {
     user: 'root',
     password: 'm@ria',
     url: 'mysql://root:m%40ria@127.0.0.1:3307/wyliebiz_app'
+  })
+})
+
+test('host database descriptors replace only the internal container address', () => {
+  const config = {
+    postgres: { host: 'database', port: 5432, user: 'postgres', password: 'secret' },
+    databaseRuntime: { version: '16-bookworm', hostPort: 20009 }
+  }
+  assert.deepEqual(checkoutHostDatabase(config, 'app'), {
+    engine: 'postgres',
+    version: '16-bookworm',
+    name: 'app',
+    host: '127.0.0.1',
+    port: 20009,
+    user: 'postgres',
+    password: 'secret',
+    url: 'postgresql://postgres:secret@127.0.0.1:20009/app?schema=public'
   })
 })

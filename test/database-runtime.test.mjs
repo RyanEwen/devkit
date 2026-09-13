@@ -13,7 +13,7 @@ const host = {
 test('a checkout owns its database runtime and uses the fixed container address', () => {
   const selected = selectDatabaseRuntime(
     host,
-    { database: { engine: 'mariadb', version: '10.2.44' } },
+    { database: { engine: 'mariadb', version: '10.2.44', hostAccess: false } },
     { composeProject: 'app-wt-issue-42' }
   )
 
@@ -24,7 +24,8 @@ test('a checkout owns its database runtime and uses the fixed container address'
     project: 'app-wt-issue-42',
     service: 'database',
     composeFile: '/devkit/infra/mariadb.yml',
-    volume: 'app-wt-issue-42-database'
+    volume: 'app-wt-issue-42-database',
+    hostPort: null
   })
   assert.equal(selected.mariadb.host, 'database')
   assert.equal(selected.mariadb.port, 3306)
@@ -34,9 +35,28 @@ test('a checkout owns its database runtime and uses the fixed container address'
 test('an omitted version uses the engine default', () => {
   const selected = selectDatabaseRuntime(
     host,
-    { database: { engine: 'postgres' } },
+    { database: { engine: 'postgres', hostAccess: false } },
     { composeProject: 'app' }
   )
   assert.equal(selected.databaseRuntime.version, '16-bookworm')
   assert.equal(selected.postgres.port, 5432)
+})
+
+test('host access records the derived loopback port', () => {
+  const selected = selectDatabaseRuntime(
+    host,
+    { database: { engine: 'postgres', hostAccess: true } },
+    { composeProject: 'app' },
+    { hostPort: 20009 }
+  )
+  assert.equal(selected.databaseRuntime.hostPort, 20009)
+})
+
+test('host access defaults to the reserved final port in the checkout block', () => {
+  const selected = selectDatabaseRuntime(
+    host,
+    { database: { engine: 'postgres', hostAccess: true }, ports: ['web'] },
+    { composeProject: 'app', slug: 'app' }
+  )
+  assert.equal(selected.databaseRuntime.hostPort % 10, 9)
 })

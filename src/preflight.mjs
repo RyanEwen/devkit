@@ -18,7 +18,8 @@ import path from 'node:path'
 
 import { checkoutBrowserUrls, scheduleBrowserOpen } from './browser.mjs'
 import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
-import { checkoutDatabase, devkitConfig } from './config.mjs'
+import { checkoutDatabase, checkoutHostDatabase, devkitConfig } from './config.mjs'
+import { ensureCheckoutInstall } from './checkout-install.mjs'
 import {
   appliedMigrationCount,
   databaseBaselineAgeDays,
@@ -67,6 +68,14 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   const inherited = copyWorktreeFiles({ checkout: readGitCheckout(repoRoot), project })
   for (const file of inherited.copied) lines.push(`${file} inherited from the primary checkout`)
   for (const file of inherited.missing) lines.push(`${file} missing here and in the primary checkout`)
+
+  if (!teardown) {
+    const installation = ensureCheckoutInstall({ repoRoot, project })
+    if (installation.installed) {
+      lines.push(`${project.install.output} installed for this checkout`)
+      log?.(`[devkit] checkout-local dependencies ready (${project.install.command.join(' ')})`)
+    }
+  }
 
   const docker = probeDocker()
   if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
@@ -188,12 +197,7 @@ function ensureInfra(config, project, log) {
     env: infraComposeEnv(config),
     services: ['proxy']
   })
-  const database = databaseCompose(config)
-  const databaseStarted = composeUp(database.project, database.files, {
-    cwd: config.infraDir,
-    env: database.env,
-    services: [database.service]
-  })
+  const databaseStarted = ensureDatabaseInfra(config)
   if (!proxyStarted || !databaseStarted) {
     throw new PreflightError(
       `the shared dev infrastructure at ${config.infraDir} could not be started`,
@@ -201,6 +205,72 @@ function ensureInfra(config, project, log) {
     )
   }
   log?.(`[devkit] proxy and checkout database ready (${project.database.engine}:${config.databaseRuntime.version})`)
+}
+
+/** Starts only the checkout database, without the proxy, routes, browser, or project dependencies. */
+function ensureDatabaseInfra(config) {
+  const database = databaseCompose(config)
+  return composeUp(database.project, database.files, {
+    cwd: config.infraDir,
+    env: database.env,
+    services: [database.service]
+  })
+}
+
+/**
+ * Prepares the checkout database for a host-side tool without starting the rest of development.
+ *
+ * The project must opt into `database.hostAccess`, which publishes a derived port on 127.0.0.1
+ * only. This entry point intentionally does not start the proxy, write a route, restore project
+ * data, check other projects, or open a browser.
+ */
+export async function prepareDatabase({ repoRoot, log = console.log }) {
+  const hostConfig = devkitConfig()
+  if (!hostConfig) return null
+
+  const checkout = checkoutIdentity(repoRoot)
+  if (!checkout) return null
+
+  const project = await loadProjectConfig(repoRoot)
+  if (!project.database.hostAccess) {
+    throw new PreflightError(
+      'this project has not enabled host access to its checkout database',
+      'set `database.hostAccess: true` in devkit.config.mjs'
+    )
+  }
+
+  const config = selectDatabaseRuntime(hostConfig, project, checkout)
+  const identity = resolveDatabaseIdentity(checkout, project)
+  copyWorktreeFiles({ checkout: readGitCheckout(repoRoot), project })
+
+  const installation = ensureCheckoutInstall({ repoRoot, project })
+  if (installation.installed) log?.(`[devkit] checkout-local dependencies ready (${project.install.command.join(' ')})`)
+
+  const docker = probeDocker()
+  if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
+  if (!ensureDatabaseInfra(config)) {
+    throw new PreflightError(
+      `the checkout ${project.database.engine} database could not be started`,
+      'run `devkit bootstrap` to (re)install Devkit, or `devkit doctor` to see what is wrong'
+    )
+  }
+  waitForDatabase(config, project)
+
+  const provisioned = ensureCheckoutDatabase(config, identity, project)
+  if (provisioned.error) {
+    throw new PreflightError(`could not create database ${provisioned.name}: ${provisioned.error}`)
+  }
+
+  const database = checkoutHostDatabase(config, identity.databaseName, project.database.engine)
+  log?.(`[devkit] host database ready (${project.database.engine}:${config.databaseRuntime.version})`)
+  return {
+    config,
+    project,
+    identity,
+    database,
+    databaseUrl: database.url,
+    compose: databaseCompose(config)
+  }
 }
 
 /** A container accepts TCP before it accepts queries; poll until a trivial query succeeds. */
