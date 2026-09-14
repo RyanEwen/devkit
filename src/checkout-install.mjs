@@ -75,6 +75,53 @@ export function ensureCheckoutInstall({
 }
 
 /**
+ * Reconstructs npm's user-agent for direct CLI calls, which npm-launched preflights receive in the
+ * environment. Keeping those identities equal prevents `devkit prepare` from making the next
+ * `npm run` preflight reinstall the dependency tree it just created.
+ */
+export function detectedPackageManagerIdentity(
+  command,
+  run = spawnSync,
+  readNpmVersion = readRuntimeNpmVersion
+) {
+  if (!command) return ''
+
+  const name = path.basename(command).replace(/\.(?:cmd|exe)$/iu, '').toLowerCase()
+  const result = run(command, ['--version'], {
+    encoding: 'utf8',
+    shell: process.platform === 'win32'
+  })
+  let version = ''
+  if (result.status === 0) {
+    version = result.stdout.trim()
+  }
+  if (!version && name === 'npm') version = readNpmVersion()
+  if (!version) return ''
+  if (name === 'npm') {
+    return `npm/${version} node/v${process.versions.node} ${process.platform} ${process.arch} workspaces/false`
+  }
+  return `${name}/${version}`
+}
+
+/** Reads the npm bundled with the active Node runtime when an agent sandbox blocks child processes. */
+function readRuntimeNpmVersion() {
+  const executableDir = path.dirname(process.execPath)
+  const candidates = process.platform === 'win32'
+    ? [path.join(executableDir, 'node_modules', 'npm', 'package.json')]
+    : [path.resolve(executableDir, '../lib/node_modules/npm/package.json')]
+
+  for (const candidate of candidates) {
+    try {
+      const version = JSON.parse(readFileSync(candidate, 'utf8')).version
+      if (typeof version === 'string' && version) return version
+    } catch {
+      // Try the next runtime layout before reporting that npm could not be identified.
+    }
+  }
+  return ''
+}
+
+/**
  * Keeps Devkit's short-lived transactional backup out of Git status without requiring projects to
  * commit a tool-specific ignore rule. Linked worktrees share the repository's local exclude file.
  */

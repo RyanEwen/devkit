@@ -47,6 +47,7 @@ import { selectDatabaseRuntime } from '../src/database-runtime.mjs'
 import { loadProjectConfig } from '../src/project-config.mjs'
 import { runDoctor } from '../src/doctor.mjs'
 import { waitForDatabase } from '../src/preflight.mjs'
+import { prepareCheckout } from '../src/checkout-prepare.mjs'
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = process.cwd()
@@ -294,6 +295,21 @@ async function infra(config) {
   console.log(`  + proxy and ${project.database.engine}:${config.databaseRuntime.version} database running`)
 }
 
+/** Prepares checkout-local files and dependencies without starting development infrastructure. */
+async function prepare() {
+  let result
+  try {
+    result = await prepareCheckout({ repoRoot })
+  } catch (error) {
+    fail(`could not prepare this checkout: ${error.message}`)
+  }
+  if (!result) fail(`${repoRoot} is not a git checkout`)
+
+  if (!result.installation.installed && result.inherited.copied.length === 0) {
+    console.log('  + checkout already prepared')
+  }
+}
+
 const [command, ...args] = process.argv.slice(2)
 
 switch (command) {
@@ -315,11 +331,15 @@ switch (command) {
   case 'infra':
     await infra(requireConfig())
     break
+  case 'prepare':
+    await prepare()
+    break
   default:
     console.log(`devkit gives every checkout and worktree on this machine its own *.localhost
 hostname, its own database and its own ports, all derived from its path.
 
   devkit bootstrap    configure the machine proxy and database definitions
+  devkit prepare      materialize this checkout's local files and dependencies
   devkit doctor       the state of every precondition, and the command that fixes each
   devkit snapshot     capture this checkout's dev data as the baseline new ones clone
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)

@@ -24,6 +24,11 @@ Bootstrap installs the proxy and database Compose definitions under `~/.config/d
 proxy, and writes the marker that enables Devkit. Devkit stays off inside containers, when
 `DEVKIT=0`, or before bootstrap.
 
+`devkit prepare` is the dependency-only entry point for a newly created checkout. It copies the
+project's declared `worktreeFiles` and materializes its declared checkout-local install without
+starting Docker, a database, the proxy, or the application. It is safe to run repeatedly and is
+available from the PATH link created by bootstrap even when the checkout has no `node_modules` yet.
+
 ## Project configuration
 
 `devkit.config.mjs` contains only what cannot be derived from the checkout path:
