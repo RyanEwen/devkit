@@ -14,7 +14,7 @@
  * `data/exports` is deliberately excluded: it is 52 MB, it is regenerable, and no worktree needs it.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -36,22 +36,19 @@ function runtimeSuffix(config) {
   return config.databaseRuntime ? `-${config.databaseRuntime.key}` : ''
 }
 
+// Checkout-local receipt, never part of the shared snapshot. Removing data/ also resets it.
+const RESTORE_MARKER = 'data/.devkit-baseline-restored'
+
 /**
- * Whether this checkout still needs seeding.
+ * Whether this checkout has completed a filesystem restore.
  *
- * Keyed on `data/library` being absent or empty rather than on a marker file, so deleting `data/`
- * to start over does the obvious thing on the next run.
+ * Application directories are not evidence of a restore: tests and startup can create them
+ * before the first preflight, leaving other baseline paths (including identities) unseeded.
+ * A receipt avoids both that false positive and resurrecting deliberately deleted files on
+ * every startup. Existing checkouts without a receipt receive one non-overwriting restore.
  */
 export function checkoutNeedsData(repoRoot) {
-  const library = path.join(repoRoot, 'data', 'library')
-  if (!existsSync(library)) return true
-  try {
-    return readdirSync(library).length === 0
-  } catch {
-    // Unreadable is treated as "needs seeding". The restore never overwrites an existing file
-    // (`--skip-old-files`), so guessing wrong here costs a no-op rather than clobbering data.
-    return true
-  }
+  return !existsSync(path.join(repoRoot, RESTORE_MARKER))
 }
 
 /** Captures the baseline archive from `repoRoot`, replacing any previous one atomically. */
@@ -63,7 +60,7 @@ export function captureDataBaseline(config, identity, repoRoot, paths = DEFAULT_
   if (present.length === 0) return { ok: false, error: `nothing to capture under ${repoRoot}/data` }
 
   const staging = `${archive}.tmp`
-  const result = spawnSync('tar', ['-czf', staging, '-C', repoRoot, ...present], { encoding: 'utf8' })
+  const result = spawnSync('tar', ['-czf', staging, '--exclude=' + RESTORE_MARKER, '-C', repoRoot, ...present], { encoding: 'utf8' })
   if (result.status !== 0) {
     return { ok: false, error: (result.stderr || result.error?.message || 'tar failed').trim() }
   }
@@ -83,6 +80,13 @@ export function restoreDataBaseline(config, identity, repoRoot) {
   const result = spawnSync('tar', ['-xzf', archive, '-C', repoRoot, '--skip-old-files'], { encoding: 'utf8' })
   if (result.status !== 0) {
     return { ok: false, error: (result.stderr || result.error?.message || 'tar failed').trim() }
+  }
+  // A failed or interrupted extraction must remain retryable. Record completion only after tar
+  // succeeds; skip-old-files preserves checkout edits when a retry follows a partial restore.
+  try {
+    writeFileSync(path.join(repoRoot, RESTORE_MARKER), 'restored\n')
+  } catch (error) {
+    return { ok: false, error: `could not record filesystem restore: ${error.message}` }
   }
   return { ok: true, archive, bytes: statSync(archive).size }
 }

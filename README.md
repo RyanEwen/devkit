@@ -111,6 +111,13 @@ worktree restores that dump before the project applies its migrations. `baseline
 checkout-local files with the same baseline, and `worktreeFiles` copies allowlisted ignored config
 from the primary checkout only when missing.
 
+Filesystem restore completion is recorded in `data/.devkit-baseline-restored`, only after a
+successful extraction. Files created by tests before the first start do not suppress restoration
+of the remaining baseline. Extraction never overwrites existing files. Existing checkouts without
+a receipt receive one non-overwriting restore; this does not replace identities they have already
+created. The receipt is excluded from snapshots. Remove it to retry a restore of missing files;
+removing `data/` also resets it. Refreshing the baseline does not reseed an already restored checkout.
+
 An `install` declaration makes the first preflight replace a missing, stale, or externally linked
 dependency tree with a checkout-local install. Devkit fingerprints the declared inputs, command,
 Node runtime, and invoking npm identity. Before installing, it moves any existing stale tree aside
