@@ -1,6 +1,6 @@
 {
   "name": "@ryanewen/devkit",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Shared local dev infrastructure: a *.localhost hostname, an isolated database and derived ports for every checkout and worktree on the machine",
   "license": "MIT",
   "type": "module",

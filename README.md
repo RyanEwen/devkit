@@ -96,7 +96,8 @@ process.exit(await lifecycle.run(['up', '--remove-orphans']))
 The lifecycle relays termination signals, removes the route, tears down the whole checkout stack,
 and removes the shared proxy after the final route closes. Named volumes are preserved. Pass
 `profiles` when profiled services also belong to the stack. Pass `teardown: true` to preflight for
-a `down` path so stopping a checkout does not start it first.
+a `down` path so stopping a checkout does not start it first. Routes carry their runner's process
+identity, so the next lifecycle operation removes stale routes left by an abrupt process exit.
 
 When development starts from VS Code or one of its agent processes, Devkit opens the configured
 URL in VS Code's integrated browser. Other terminals use the operating system browser. Set

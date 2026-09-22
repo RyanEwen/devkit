@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -144,6 +144,64 @@ test('bootstrap reconciliation removes a legacy proxy unless routes are active',
     assert.deepEqual(reconcileProxy(config, { start, stop }), { ok: true, running: true })
     assert.equal(starts.length, 1)
     assert.equal(stops.length, 1)
+  } finally {
+    rmSync(config.configDir, { recursive: true, force: true })
+  }
+})
+
+test('reconciliation removes abandoned leased and legacy checkout routes', () => {
+  const config = scratchConfig()
+  const leased = worktreeIdentity('leased')
+  const legacy = worktreeIdentity('legacy')
+  const stops = []
+
+  try {
+    const leasedFile = writeRoute(config, leased, 21000)
+    writeFileSync(
+      leasedFile,
+      readFileSync(leasedFile, 'utf8').replace(String(process.pid), '2147483647'),
+      'utf8'
+    )
+    const legacyFile = writeRoute(config, legacy, 22000)
+    writeFileSync(
+      legacyFile,
+      readFileSync(legacyFile, 'utf8').replace(/^# Devkit checkout owner pid: \d+\n/m, ''),
+      'utf8'
+    )
+
+    const result = reconcileProxy(config, {
+      containers: () => [],
+      start: () => true,
+      stop: (...args) => {
+        stops.push(args)
+        return true
+      }
+    })
+
+    assert.deepEqual(result, { ok: true, running: false })
+    assert.equal(existsSync(leasedFile), false)
+    assert.equal(existsSync(legacyFile), false)
+    assert.equal(stops.length, 1)
+  } finally {
+    rmSync(config.configDir, { recursive: true, force: true })
+  }
+})
+
+test('reconciliation preserves a legacy route whose checkout stack is still running', () => {
+  const config = scratchConfig()
+  const identity = worktreeIdentity('legacy-active')
+
+  try {
+    const file = writeRoute(config, identity, 22000)
+    writeFileSync(file, readFileSync(file, 'utf8').replace(/^# Devkit checkout owner pid: \d+\n/m, ''), 'utf8')
+    const result = reconcileProxy(config, {
+      containers: (project) => project === identity.composeProject ? ['database'] : [],
+      start: () => true,
+      stop: () => true
+    })
+
+    assert.deepEqual(result, { ok: true, running: true })
+    assert.equal(existsSync(file), true)
   } finally {
     rmSync(config.configDir, { recursive: true, force: true })
   }
