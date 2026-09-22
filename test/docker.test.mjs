@@ -88,3 +88,9 @@ test('checkout database definitions do not publish host ports', () => {
     assert.doesNotMatch(compose, /^\s+ports:/m)
   }
 })
+
+test('the shared proxy does not restart after Docker Desktop wakes', () => {
+  const compose = readFileSync(new URL('../infra/compose.yml', import.meta.url), 'utf8')
+  assert.match(compose, /^\s+restart: "no"$/m)
+  assert.doesNotMatch(compose, /^\s+restart: always$/m)
+})

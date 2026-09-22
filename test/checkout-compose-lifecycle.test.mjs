@@ -18,6 +18,7 @@ function fixture({ downStatus = 0 } = {}) {
   const child = new FakeChild()
   const processTarget = new EventEmitter()
   const calls = []
+  const releases = []
   const runtime = {
     process: processTarget,
     spawn(command, args, options) {
@@ -45,14 +46,19 @@ function fixture({ downStatus = 0 } = {}) {
     child,
     lifecycle: checkoutComposeLifecycle(state, invocation, {
       profiles: ['slicer'],
-      runtime
+      runtime,
+      releaseProxy(config, identity) {
+        releases.push({ config, identity })
+        return true
+      }
     }),
-    processTarget
+    processTarget,
+    releases
   }
 }
 
 test('stop includes configured profiles and tears down only once', () => {
-  const { calls, lifecycle } = fixture()
+  const { calls, lifecycle, releases } = fixture()
 
   assert.equal(lifecycle.stop(), 0)
   assert.equal(lifecycle.stop(), 0)
@@ -60,6 +66,7 @@ test('stop includes configured profiles and tears down only once', () => {
     type: 'spawnSync',
     args: ['compose', '-p', 'app-test', '--profile', 'slicer', 'down', '--remove-orphans']
   }])
+  assert.equal(releases.length, 1)
 })
 
 test('run translates Ctrl-C and tears down the complete stack', async () => {

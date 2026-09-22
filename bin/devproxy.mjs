@@ -2,35 +2,30 @@
 /**
  * Claims a `*.localhost` hostname on the shared dev proxy, for ANY project on the machine.
  *
- * The proxy (infra/compose.yml) was always machine-wide, but only PrintStream could register with
- * it: `scripts/dev/host-mode/proxy.mjs` writes a route per checkout on `npm run dev` and removes it
- * on exit. Every other project on the machine had a running dev server and no way to name it. This
- * is that way, and it is deliberately NOT PrintStream-specific: it takes a hostname and a port and
- * knows nothing else about what is listening.
+ * The proxy is machine-wide, while checkout routes are owned by their project lifecycle. Every
+ * other project on the machine still needs a way to claim a stable name. This is that way, and it
+ * is deliberately project-agnostic: it takes a hostname and a port and knows nothing else about
+ * what is listening.
  *
  * Contract, and the reason this is a separate tool rather than a flag on `npm run dev`:
- *   - A route written here is PERMANENT until removed. PrintStream's are tied to a process
- *     lifetime because a checkout stops existing; a project you gave a name to should still answer
- *     that name after a reboot, so nothing here cleans up on exit.
- *   - It never edits PrintStream's generated files, and its own are prefixed `devproxy-` so the two
+ *   - A route written here is PERMANENT until removed. Checkout routes are tied to a process
+ *     lifetime; a project explicitly given a name remains a proxy consumer until `devproxy rm`.
+ *   - It never edits checkout-generated files, and its own are prefixed `devproxy-` so the two
  *     sets cannot be confused (or collide: Traefik merges every file in the directory into one
  *     configuration, and two routers sharing a name is a conflict, not an override).
  *   - It reads the routes directory and proxy port from the marker file rather than hardcoding
  *     them, so there is exactly one source of truth for where routes live.
  *
- * Installed OUTSIDE the repo (bootstrap.mjs copies this directory to ~/.config/printstream-dev),
- * for the same reason as the compose file beside it: the machine's proxy must not stop working
- * because a checkout was deleted or switched to a branch that predates it.
- *
- * Counterparts: `infra/traefik.yml` (which names the watched directory) and
- * `scripts/dev/host-mode/proxy.mjs` (the same file format, written per checkout).
+ * Counterparts: `infra/traefik.yml` (which names the watched directory) and `src/proxy.mjs` (the
+ * same file format plus the shared lazy-start lifecycle).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
-import os from 'node:os'
 import path from 'node:path'
 
-const MARKER = path.join(os.homedir(), '.config', 'printstream-dev', 'host.json')
+import { devkitConfig } from '../src/config.mjs'
+import { reconcileProxy } from '../src/proxy.mjs'
+
 /** Marks the files this tool owns, so `ls` can tell them apart and `rm` cannot delete the others. */
 const PREFIX = 'devproxy-'
 
@@ -41,17 +36,14 @@ function fail(message, hint) {
 }
 
 function config() {
-  if (!existsSync(MARKER)) {
+  const cfg = devkitConfig()
+  if (!cfg) {
     fail(
-      `no dev proxy on this machine (${MARKER} is missing)`,
-      'Install it from a PrintStream checkout: npm run dev:bootstrap'
+      'Devkit is not enabled on this machine',
+      'Run `devkit bootstrap` once from the host.'
     )
   }
-  try {
-    return JSON.parse(readFileSync(MARKER, 'utf8'))
-  } catch (error) {
-    fail(`${MARKER} is not readable JSON: ${error.message}`)
-  }
+  return cfg
 }
 
 /**
@@ -140,6 +132,9 @@ http:
     'utf8'
   )
 
+  const proxy = reconcileProxy(cfg)
+  if (!proxy.ok) fail('the route was written, but the shared proxy could not be started', 'Run `devkit doctor` for details.')
+
   console.log(`  ${proxyOrigin(cfg, hostname)}  ->  http://localhost:${port}`)
   return portAnswers(port).then((answers) => {
     if (!answers) console.log(`  (nothing is listening on ${port} yet; the route is live and will work once something is)`)
@@ -162,6 +157,8 @@ function remove(cfg, [rawHost]) {
     fail(`no devproxy route for ${hostname}`, 'devproxy ls shows what is registered')
   }
   rmSync(file, { force: true })
+  const proxy = reconcileProxy(cfg)
+  if (!proxy.ok) fail('the route was removed, but the shared proxy could not be reconciled', 'Run `devkit doctor` for details.')
   console.log(`  removed ${hostname}`)
 }
 

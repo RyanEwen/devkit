@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
 
-import { removeRoute } from './proxy.mjs'
+import { releaseProxy as releaseSharedProxy } from './proxy.mjs'
 
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -34,7 +34,11 @@ function exitCodeFor(code, signal) {
  *
  * The runtime option is a test seam; project runners should use the Node defaults.
  */
-export function checkoutComposeLifecycle(state, invocation, { profiles = [], runtime = defaultRuntime } = {}) {
+export function checkoutComposeLifecycle(
+  state,
+  invocation,
+  { profiles = [], runtime = defaultRuntime, releaseProxy = releaseSharedProxy } = {}
+) {
   if (!state?.config || !state?.identity) {
     throw new Error('devkit: checkoutComposeLifecycle requires a completed preflight state')
   }
@@ -50,6 +54,8 @@ export function checkoutComposeLifecycle(state, invocation, { profiles = [], run
     if (stopped) return 0
     stopped = true
 
+    let cleanupCode
+    let proxyReleased = false
     try {
       const result = runtime.spawnSync(
         invocation.command,
@@ -65,10 +71,15 @@ export function checkoutComposeLifecycle(state, invocation, { profiles = [], run
           stdio: 'inherit'
         }
       )
-      return exitCodeFor(result.status, result.signal)
+      cleanupCode = exitCodeFor(result.status, result.signal)
     } finally {
-      removeRoute(state.config, state.identity)
+      try {
+        proxyReleased = releaseProxy(state.config, state.identity)
+      } catch (error) {
+        console.error(`[devkit] shared proxy cleanup failed: ${error.message}`)
+      }
     }
+    return cleanupCode === 0 && !proxyReleased ? 1 : cleanupCode
   }
 
   // This covers synchronous setup failures after the lifecycle has been created. `stop` is

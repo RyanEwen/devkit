@@ -64,6 +64,15 @@ export function composeUp(project, files, { cwd, services = [], env } = {}) {
   return result.status === 0
 }
 
+/** Removes a Compose project and its containers while preserving named volumes. */
+export function composeDown(project, files, { cwd, env } = {}) {
+  const args = ['compose', '-p', project]
+  for (const file of files) args.push('-f', file)
+  args.push('down', '--remove-orphans')
+  const result = run('docker', args, { cwd, stdio: 'inherit', env: env ? { ...process.env, ...env } : process.env })
+  return result.status === 0
+}
+
 /** Environment the proxy Compose file interpolates. */
 export function infraComposeEnv(config) {
   return {

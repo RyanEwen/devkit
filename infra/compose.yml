@@ -19,7 +19,9 @@ services:
     # security updates, and pinning an exact patch here would mean pinning whatever was current when
     # this file was written. Pin one if you ever need a reproducible proxy.
     image: traefik:v3
-    restart: always
+    # The project lifecycle starts this on first use and removes it after the final route closes.
+    # A restart policy would resurrect an unused proxy whenever Docker Desktop starts.
+    restart: "no"
     ports:
       - "127.0.0.1:${DEVKIT_PROXY_PORT:-80}:80"
       - "[::1]:${DEVKIT_PROXY_PORT:-80}:80"

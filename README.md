@@ -10,8 +10,9 @@ worktree fix-123   -> http://fix-123.printstream.localhost
 game-is-up         -> http://game-is-up.localhost
 ```
 
-The only machine-wide service is Traefik on loopback port 80. Checkout stacks do not share Docker
-networks or databases. Inactive stacks keep only their named volumes.
+The only machine-wide service is Traefik on loopback port 80. It starts when the first routed
+project starts and is removed when the last route closes, allowing Docker Desktop to idle. Checkout
+stacks do not share Docker networks or databases. Inactive stacks keep only their named volumes.
 
 ## Setup
 
@@ -20,8 +21,8 @@ npm install --save-dev github:RyanEwen/devkit
 npx devkit bootstrap
 ```
 
-Bootstrap installs the proxy and database Compose definitions under `~/.config/devkit`, starts the
-proxy, and writes the marker that enables Devkit. Devkit stays off inside containers, when
+Bootstrap installs the proxy and database Compose definitions under `~/.config/devkit` and writes
+the marker that enables Devkit. Devkit stays off inside containers, when
 `DEVKIT=0`, or before bootstrap.
 
 `devkit prepare` is the dependency-only entry point for a newly created checkout. It copies the
@@ -92,10 +93,10 @@ if (process.argv.includes('--down')) process.exit(lifecycle.stop())
 process.exit(await lifecycle.run(['up', '--remove-orphans']))
 ```
 
-The lifecycle relays termination signals, removes the route, and tears down the whole checkout
-stack while preserving named volumes. Pass `profiles` when profiled services also belong to the
-stack. Pass `teardown: true` to preflight for a `down` path so stopping a checkout does not start
-it first.
+The lifecycle relays termination signals, removes the route, tears down the whole checkout stack,
+and removes the shared proxy after the final route closes. Named volumes are preserved. Pass
+`profiles` when profiled services also belong to the stack. Pass `teardown: true` to preflight for
+a `down` path so stopping a checkout does not start it first.
 
 When development starts from VS Code or one of its agent processes, Devkit opens the configured
 URL in VS Code's integrated browser. Other terminals use the operating system browser. Set
@@ -143,3 +144,6 @@ without starting the proxy, checking other projects, restoring data, or opening 
 
 `devkit reset` refuses to reset the primary checkout. Port blocks and Compose project names are
 derived from checkout paths; no allocation registry or shared database profile exists.
+
+A permanent route created with `devproxy add` is also a proxy consumer. Traefik remains running
+until that route is removed with `devproxy rm`, even when no checkout projects are active.

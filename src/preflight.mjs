@@ -10,12 +10,9 @@
  * Returns `null` before touching Docker, a database, or the filesystem when devkit is off. See
  * `config.mjs` for why that is a hard guarantee rather than best-effort.
  *
- * Counterparts: `infra/compose.yml` (what `ensureInfra` starts) and each project's
+ * Counterparts: `infra/compose.yml` (the lazily managed proxy) and each project's
  * `devkit.config.mjs` (which supplies the env its servers read).
  */
-import { mkdirSync } from 'node:fs'
-import path from 'node:path'
-
 import { checkoutBrowserUrls, scheduleBrowserOpen } from './browser.mjs'
 import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
 import { checkoutDatabase, checkoutHostDatabase, devkitConfig } from './config.mjs'
@@ -29,11 +26,11 @@ import {
   snapshotBaseline
 } from './database.mjs'
 import { baselineAgeDays, captureDataBaseline, checkoutNeedsData, restoreDataBaseline } from './data-baseline.mjs'
-import { databaseCompose, composeUp, infraComposeEnv, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
+import { databaseCompose, composeUp, mariadbSql, postgresSql, probeDocker } from './docker.mjs'
 import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, failedProjectDependencies } from './project-dependencies.mjs'
-import { writeRoute } from './proxy.mjs'
+import { acquireProxy } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
 
 /** Fails the run with a message that names the fix, rather than a stack trace. */
@@ -81,7 +78,12 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   if (!docker.ok) throw new PreflightError(docker.reason, docker.fix)
 
   if (!teardown) {
-    ensureInfra(config, project, log)
+    if (!ensureDatabaseInfra(config)) {
+      throw new PreflightError(
+        `the checkout ${project.database.engine} database could not be started`,
+        'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
+      )
+    }
     if (checkDependencies) await requireProjectDependencies(config, project)
     waitForDatabase(config, project)
 
@@ -105,8 +107,6 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
     else if (!restored.missing) lines.push(`data/ could not be restored: ${restored.error}`)
   }
 
-  if (!teardown) writeRoute(config, identity, ports.web)
-
   const age = teardown
     ? null
     : project.baselinePaths.length > 0
@@ -117,11 +117,6 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   }
 
   const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
-  // Teardown must not schedule a fresh browser tab while it removes the route and containers.
-  if (project.browser && checkDependencies && !teardown) {
-    const browser = checkoutBrowserUrls(url, project.browser)
-    scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
-  }
   const engine = project.database.engine
   const database = checkoutDatabase(config, identity.databaseName, engine)
   const databaseUrl = database.url
@@ -136,7 +131,7 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
     configDir: config.configDir
   }
 
-  return {
+  const result = {
     ...context,
     config,
     project,
@@ -148,6 +143,24 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
       : appliedMigrationCount(config, identity.databaseName, project.migrationsTable, project),
     env: { ...baseEnv(context), ...project.env(context) }
   }
+
+  if (!teardown) {
+    if (!acquireProxy(config, identity, ports.web)) {
+      throw new PreflightError(
+        `the shared dev proxy at ${config.infraDir} could not be started`,
+        'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
+      )
+    }
+    log?.(`[devkit] proxy and checkout database ready (${project.database.engine}:${config.databaseRuntime.version})`)
+  }
+
+  // Teardown must not schedule a fresh browser tab while it removes the route and containers.
+  if (project.browser && checkDependencies && !teardown) {
+    const browser = checkoutBrowserUrls(url, project.browser)
+    scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
+  }
+
+  return result
 }
 
 /** Verifies declared applications are alive but deliberately never starts or manages them. */
@@ -186,25 +199,6 @@ function baseEnv({ identity, ports, url, databaseUrl }) {
     /** Vite rejects an unknown Host header, and every request arrives from the proxy carrying it. */
     VITE_DEV_ALLOWED_HOSTS: [identity.hostname, 'localhost', '127.0.0.1'].join(',')
   }
-}
-
-/** Brings the shared stack up. Idempotent, so this runs on every start without costing anything. */
-function ensureInfra(config, project, log) {
-  const composeFile = path.join(config.infraDir, 'compose.yml')
-  mkdirSync(config.routesDir, { recursive: true })
-  const proxyStarted = composeUp(config.infraProject, [composeFile], {
-    cwd: config.infraDir,
-    env: infraComposeEnv(config),
-    services: ['proxy']
-  })
-  const databaseStarted = ensureDatabaseInfra(config)
-  if (!proxyStarted || !databaseStarted) {
-    throw new PreflightError(
-      `the shared dev infrastructure at ${config.infraDir} could not be started`,
-      'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
-    )
-  }
-  log?.(`[devkit] proxy and checkout database ready (${project.database.engine}:${config.databaseRuntime.version})`)
 }
 
 /** Starts only the checkout database, without the proxy, routes, browser, or project dependencies. */

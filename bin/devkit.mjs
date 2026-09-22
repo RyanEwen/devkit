@@ -45,6 +45,7 @@ import {
 } from '../src/docker.mjs'
 import { selectDatabaseRuntime } from '../src/database-runtime.mjs'
 import { loadProjectConfig } from '../src/project-config.mjs'
+import { reconcileProxy } from '../src/proxy.mjs'
 import { runDoctor } from '../src/doctor.mjs'
 import { waitForDatabase } from '../src/preflight.mjs'
 import { prepareCheckout } from '../src/checkout-prepare.mjs'
@@ -112,17 +113,18 @@ function bootstrap() {
     proxyPort: 80
   }
 
-  if (!composeUp(config.infraProject, [path.join(infraDir, 'compose.yml')], {
-    cwd: infraDir,
-    env: infraComposeEnv(config),
-    services: ['proxy']
-  })) {
+  const proxy = reconcileProxy(config)
+  if (!proxy.ok) {
     fail(
-      'the shared infrastructure could not be started',
+      'the shared proxy lifecycle could not be reconciled',
       `Inspect it with: docker compose -p ${config.infraProject} -f ${path.join(infraDir, 'compose.yml')} logs`
     )
   }
-  console.log('  + proxy running; checkout databases start with their projects')
+  console.log(
+    proxy.running
+      ? '  + proxy refreshed for active routes; it stops when the last one closes'
+      : '  + proxy installed and idle; it starts with the first project'
+  )
 
   linkOntoPath('devkit')
   linkOntoPath('devproxy')
