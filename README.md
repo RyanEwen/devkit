@@ -99,9 +99,11 @@ and removes the shared proxy after the final route closes. Named volumes are pre
 a `down` path so stopping a checkout does not start it first. Routes carry their runner's process
 identity, so the next lifecycle operation removes stale routes left by an abrupt process exit.
 
-When development starts from VS Code or one of its agent processes, Devkit opens the configured
-URL in VS Code's integrated browser. Other terminals use the operating system browser. Set
-`DEVKIT_OPEN_BROWSER=0` to suppress automatic opening entirely.
+When development starts from a new VS Code terminal, Devkit opens the configured URL in that
+window's integrated browser. The bundled bridge gives each terminal a window-scoped callback so
+another open editor cannot claim the tab. Existing terminals must be relaunched after the bridge
+is installed or updated; until then, and for agent processes without that callback, Devkit uses
+the operating system browser. Set `DEVKIT_OPEN_BROWSER=0` to suppress automatic opening entirely.
 
 ## Data and worktrees
 

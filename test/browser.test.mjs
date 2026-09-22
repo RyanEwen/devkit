@@ -90,8 +90,11 @@ test('VS Code Server browser helper uses the askpass runtime available in integr
 
 test('VS Code browser URI safely carries the complete project URL', () => {
   assert.equal(
-    vsCodeBrowserUri('http://public-api.localhost/api/?one=two'),
-    'vscode://ryanewen.devkit-browser/open?url=http%3A%2F%2Fpublic-api.localhost%2Fapi%2F%3Fone%3Dtwo'
+    vsCodeBrowserUri(
+      'http://public-api.localhost/api/?one=two',
+      'vscode://ryanewen.devkit-browser/open?windowId=14'
+    ),
+    'vscode://ryanewen.devkit-browser/open?windowId=14&url=http%3A%2F%2Fpublic-api.localhost%2Fapi%2F%3Fone%3Dtwo'
   )
 })
 
@@ -100,7 +103,7 @@ test('installed VS Code browser bridge is reused', () => {
   assert.equal(ensureVsCodeBrowserBridge({
     spawnSyncImpl: (command, args) => {
       calls.push([command, args])
-      return { status: 0, stdout: 'ryanewen.devkit-browser@0.1.0\n' }
+      return { status: 0, stdout: 'ryanewen.devkit-browser@0.2.0\n' }
     }
   }), true)
   assert.equal(calls.length, 1)
@@ -116,22 +119,39 @@ test('missing VS Code browser bridge is installed from the bundled VSIX', () => 
   }), true)
   assert.equal(calls.length, 2)
   assert.equal(calls[1][1][0], '--install-extension')
-  assert.match(calls[1][1][1], /devkit-browser-0\.1\.0\.vsix$/)
+  assert.match(calls[1][1][1], /devkit-browser-0\.2\.0\.vsix$/)
 })
 
 test('integrated browser command sends the URL through VS Code Server', () => {
   const env = {
     VSCODE_IPC_HOOK_CLI: '/run/user/1000/vscode-ipc.sock',
-    BROWSER: '/opt/vscode/browser.sh'
+    BROWSER: '/opt/vscode/browser.sh',
+    DEVKIT_VSCODE_BROWSER_URI: 'vscode://ryanewen.devkit-browser/open?windowId=14'
   }
   assert.deepEqual(integratedBrowserCommand('http://app.localhost/', {
     env,
     existsSyncImpl: () => true,
-    spawnSyncImpl: () => ({ status: 0, stdout: 'ryanewen.devkit-browser@0.1.0\n' })
+    spawnSyncImpl: () => ({ status: 0, stdout: 'ryanewen.devkit-browser@0.2.0\n' })
   }), {
     command: '/opt/vscode/browser.sh',
-    args: ['vscode://ryanewen.devkit-browser/open?url=http%3A%2F%2Fapp.localhost%2F']
+    args: ['vscode://ryanewen.devkit-browser/open?windowId=14&url=http%3A%2F%2Fapp.localhost%2F']
   })
+})
+
+test('integrated browser requires a callback scoped to the originating VS Code window', () => {
+  let bridgeChecked = false
+  assert.equal(integratedBrowserCommand('http://app.localhost/', {
+    env: {
+      VSCODE_IPC_HOOK_CLI: '/run/user/1000/vscode-ipc.sock',
+      BROWSER: '/opt/vscode/browser.sh'
+    },
+    existsSyncImpl: () => true,
+    spawnSyncImpl: () => {
+      bridgeChecked = true
+      return { status: 0, stdout: 'ryanewen.devkit-browser@0.2.0\n' }
+    }
+  }), null)
+  assert.equal(bridgeChecked, true)
 })
 
 test('failed bridge setup falls back to the native browser', () => {

@@ -79,8 +79,8 @@ export function browserCommand(url, {
   return { command: 'xdg-open', args: [url] }
 }
 
-export function vsCodeBrowserUri(url) {
-  const uri = new URL(`vscode://${bridgeExtensionId}/open`)
+export function vsCodeBrowserUri(url, callbackUri = `vscode://${bridgeExtensionId}/open`) {
+  const uri = new URL(callbackUri)
   uri.searchParams.set('url', url)
   return uri.href
 }
@@ -111,7 +111,10 @@ export function integratedBrowserCommand(url, {
 } = {}) {
   const helper = vsCodeBrowserHelper(env, { existsSyncImpl })
   if (!helper || !ensureVsCodeBrowserBridge({ spawnSyncImpl })) return null
-  return { command: helper, args: [vsCodeBrowserUri(url)] }
+
+  const callbackUri = env.DEVKIT_VSCODE_BROWSER_URI
+  if (!callbackUri) return null
+  return { command: helper, args: [vsCodeBrowserUri(url, callbackUri)] }
 }
 
 export function openBrowser(url, {

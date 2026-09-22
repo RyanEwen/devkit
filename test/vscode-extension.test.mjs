@@ -15,5 +15,5 @@ test('browser bridge accepts only local HTTP project URLs', () => {
 })
 
 test('tagged Devkit installs include the packaged browser bridge', () => {
-  assert.equal(existsSync(new URL('../vscode-extension/devkit-browser-0.1.0.vsix', import.meta.url)), true)
+  assert.equal(existsSync(new URL('../vscode-extension/devkit-browser-0.2.0.vsix', import.meta.url)), true)
 })

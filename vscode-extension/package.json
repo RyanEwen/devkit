@@ -2,7 +2,7 @@
   "name": "devkit-browser",
   "displayName": "Devkit Browser Bridge",
   "description": "Opens Devkit project URLs in VS Code's integrated browser.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "ryanewen",
   "license": "MIT",
   "repository": {
@@ -17,6 +17,7 @@
     "Other"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onUri"
   ],
   "main": "./extension.js",
