@@ -128,7 +128,7 @@ test('a project can declare independently managed runtime dependencies', async (
   assert.deepEqual(config.dependencies, [{ name: 'public-api', healthPath: '/api/_health' }])
 })
 
-test('a project can opt into opening its browser URL after a separate health check', async () => {
+test('a project can declare a browser destination and a separate health check', async () => {
   const config = await withConfig(`export default {
     browser: { path: '/api/', healthPath: '/api/_health' }
   }`)

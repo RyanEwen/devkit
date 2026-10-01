@@ -13,7 +13,7 @@
  * Counterparts: `infra/compose.yml` (the lazily managed proxy) and each project's
  * `devkit.config.mjs` (which supplies the env its servers read).
  */
-import { checkoutBrowserUrls, scheduleBrowserOpen } from './browser.mjs'
+import { browserOpenTarget, checkoutBrowserUrls, scheduleBrowserOpen, validateBrowserTarget } from './browser.mjs'
 import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
 import { checkoutDatabase, checkoutHostDatabase, devkitConfig } from './config.mjs'
 import { ensureCheckoutInstall } from './checkout-install.mjs'
@@ -46,13 +46,26 @@ export class PreflightError extends Error {
  *
  * Ordering matters in one place only: the database must exist before the project applies its
  * migrations, which is why this is called before that step rather than alongside it.
+ * `openBrowser` accepts true/auto, native, or vscode; by default only --open or
+ * DEVKIT_OPEN_BROWSER explicitly requests a tab. False suppresses opening for this call.
  */
-export async function preflight({ repoRoot, log = console.log, checkDependencies = true, teardown = false }) {
+export async function preflight({
+  repoRoot,
+  log = console.log,
+  checkDependencies = true,
+  teardown = false,
+  openBrowser
+}) {
   const hostConfig = devkitConfig()
   if (!hostConfig) return null
 
   const checkout = checkoutIdentity(repoRoot)
   if (!checkout) return null
+
+  // Preserve Devkit's off switch and keep teardown independent of opening requests.
+  const browserTarget = teardown
+    ? false
+    : validateBrowserTarget(openBrowser === undefined ? browserOpenTarget() : openBrowser)
 
   const project = await loadProjectConfig(repoRoot)
   const config = selectDatabaseRuntime(hostConfig, project, checkout)
@@ -155,9 +168,9 @@ export async function preflight({ repoRoot, log = console.log, checkDependencies
   }
 
   // Teardown must not schedule a fresh browser tab while it removes the route and containers.
-  if (project.browser && checkDependencies && !teardown) {
+  if (browserTarget && project.browser && checkDependencies && !teardown) {
     const browser = checkoutBrowserUrls(url, project.browser)
-    scheduleBrowserOpen(browser.openUrl, browser.healthUrl)
+    scheduleBrowserOpen(browser.openUrl, browser.healthUrl, { target: browserTarget })
   }
 
   return result

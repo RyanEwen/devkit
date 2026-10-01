@@ -99,11 +99,25 @@ and removes the shared proxy after the final route closes. Named volumes are pre
 a `down` path so stopping a checkout does not start it first. Routes carry their runner's process
 identity, so the next lifecycle operation removes stale routes left by an abrupt process exit.
 
-When development starts from a new VS Code terminal, Devkit opens the configured URL in that
-window's integrated browser. The bundled bridge gives each terminal a window-scoped callback so
-another open editor cannot claim the tab. Existing terminals must be relaunched after the bridge
-is installed or updated; until then, and for agent processes without that callback, Devkit uses
-the operating system browser. Set `DEVKIT_OPEN_BROWSER=0` to suppress automatic opening entirely.
+Starting development leaves the browser alone by default, even when `browser` is configured.
+Pass `--open` to the project's dev runner to request opening after its health check succeeds:
+
+```bash
+npm run dev -- --open
+npm run dev -- --open=native
+npm run dev -- --open=vscode
+```
+
+`--open` chooses the VS Code integrated browser when its window-scoped bridge is available,
+otherwise the operating system browser. An explicit `--open=vscode` reports an unavailable
+bridge instead of opening another browser. Existing VS Code terminals must be relaunched after
+the bundled bridge is installed or updated.
+
+Preflight reads these arguments from its own process. Runners that consume arguments in another
+process must forward the choice as `preflight({ repoRoot, openBrowser: true })`, or use
+`openBrowser: 'native'` or `'vscode'`. Pass `false` to suppress opening for a particular call.
+`DEVKIT_OPEN_BROWSER=1` (or `native`/`vscode`) also opts in when a runner cannot forward arguments;
+command-line options take precedence. `DEVKIT_OPEN_BROWSER=0` leaves opening disabled.
 
 ## Data and worktrees
 

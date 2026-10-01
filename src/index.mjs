@@ -16,3 +16,5 @@ export { inheritWorktreeFiles } from './worktree-files.mjs'
 export { checkoutCompose } from './checkout-compose.mjs'
 export { checkoutComposeLifecycle } from './checkout-compose-lifecycle.mjs'
 export { prepareCheckout } from './checkout-prepare.mjs'
+
+export { browserOpenTarget } from './browser.mjs'

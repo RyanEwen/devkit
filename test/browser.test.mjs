@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { preflight } from '../src/preflight.mjs'
 
 import {
   browserCommand,
+  browserOpenTarget,
   checkoutBrowserUrls,
   ensureVsCodeBrowserBridge,
   integratedBrowserCommand,
@@ -168,7 +170,7 @@ test('failed bridge setup falls back to the native browser', () => {
   assert.deepEqual(opened, ['cmd.exe', ['/c', 'start', '', 'http://app.localhost/']])
 })
 
-test('DEVKIT_OPEN_BROWSER=0 suppresses the detached opener', () => {
+test('no opening request suppresses the detached opener', () => {
   let spawned = false
   assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/', {
     env: { DEVKIT_OPEN_BROWSER: '0' },
@@ -181,6 +183,7 @@ test('VS Code browser waiter inherits output so its ready URL is clickable', () 
   let options
   let unreferenced = false
   assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/', {
+    target: 'auto',
     env: { TERM_PROGRAM: 'vscode' },
     spawnImpl: (_command, _args, spawnOptions) => {
       options = spawnOptions
@@ -189,4 +192,71 @@ test('VS Code browser waiter inherits output so its ready URL is clickable', () 
   }), true)
   assert.deepEqual(options.stdio, ['ignore', 'inherit', 'inherit'])
   assert.equal(unreferenced, true)
+})
+
+
+test('browser opening is opt-in with CLI precedence over environment defaults', () => {
+  assert.equal(browserOpenTarget([], {}), false)
+  assert.equal(browserOpenTarget([], { DEVKIT_OPEN_BROWSER: '0' }), false)
+  assert.equal(browserOpenTarget(['--open'], {}), 'auto')
+  assert.equal(browserOpenTarget(['--open=native'], { DEVKIT_OPEN_BROWSER: 'vscode' }), 'native')
+  assert.equal(browserOpenTarget(['--open'], { DEVKIT_OPEN_BROWSER: '0' }), 'auto')
+  assert.equal(browserOpenTarget([], { DEVKIT_OPEN_BROWSER: '1' }), 'auto')
+  assert.equal(browserOpenTarget([], { DEVKIT_OPEN_BROWSER: 'vscode' }), 'vscode')
+  assert.throws(() => browserOpenTarget(['--open=unknown'], {}), /Browser target/)
+  assert.throws(() => browserOpenTarget(['--open='], {}), /Browser target/)
+})
+
+test('selected browser target reaches the detached health waiter', () => {
+  let argumentsPassed
+  assert.equal(scheduleBrowserOpen('http://app.localhost/', 'http://app.localhost/health', {
+    target: 'native',
+    env: {},
+    spawnImpl: (_command, args) => {
+      argumentsPassed = args
+      return { unref() {} }
+    }
+  }), true)
+  assert.deepEqual(argumentsPassed.slice(1), [
+    '--wait', 'http://app.localhost/', 'http://app.localhost/health', 'native'
+  ])
+})
+
+test('an explicit VS Code request fails without opening a different browser', () => {
+  let spawned = false
+  assert.throws(() => openBrowser('http://app.localhost/', {
+    target: 'vscode',
+    env: {},
+    spawnImpl: () => { spawned = true }
+  }), /VS Code integrated browser unavailable/)
+  assert.equal(spawned, false)
+})
+
+test('native opening skips VS Code extension setup even in an editor terminal', () => {
+  let bridgeChecked = false
+  assert.equal(openBrowser('http://app.localhost/', {
+    target: 'native',
+    env: { TERM_PROGRAM: 'vscode' },
+    existsSyncImpl: () => false,
+    spawnSyncImpl: () => { bridgeChecked = true },
+    spawnImpl: () => ({ unref() {} })
+  }), 'native')
+  assert.equal(bridgeChecked, false)
+})
+
+
+test('disabled Devkit ignores browser options instead of breaking the host runner', async () => {
+  const previousFlag = process.env.DEVKIT
+  const previousBrowser = process.env.DEVKIT_OPEN_BROWSER
+  process.env.DEVKIT = '0'
+  process.env.DEVKIT_OPEN_BROWSER = 'unrelated-browser-setting'
+  try {
+    assert.equal(await preflight({ repoRoot: '/missing-checkout' }), null)
+    assert.equal(await preflight({ repoRoot: '/missing-checkout', openBrowser: 'unsupported' }), null)
+  } finally {
+    if (previousFlag === undefined) delete process.env.DEVKIT
+    else process.env.DEVKIT = previousFlag
+    if (previousBrowser === undefined) delete process.env.DEVKIT_OPEN_BROWSER
+    else process.env.DEVKIT_OPEN_BROWSER = previousBrowser
+  }
 })

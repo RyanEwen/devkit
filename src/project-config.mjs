@@ -42,7 +42,7 @@ const DEFAULTS = {
   install: null,
   /** Other Devkit projects that must already answer before this project starts. */
   dependencies: [],
-  /** Browser destination to open once this checkout answers, or null to leave the browser alone. */
+  /** Browser destination and readiness probe used only when the runner requests opening. */
   browser: null,
   /** Returns the environment the project's dev servers need. See `preflight.mjs` for the argument. */
   env: () => ({}),
