@@ -72,11 +72,21 @@ export function checkoutComposeLifecycle(
         }
       )
       cleanupCode = exitCodeFor(result.status, result.signal)
+    } catch (error) {
+      console.error(`[devkit] checkout stack cleanup failed: ${error.message}`)
+      cleanupCode = 1
     } finally {
       try {
         proxyReleased = releaseProxy(state.config, state.identity)
       } catch (error) {
         console.error(`[devkit] shared proxy cleanup failed: ${error.message}`)
+      } finally {
+        try {
+          state.runner?.release()
+        } catch (error) {
+          console.error(`[devkit] runner lease cleanup failed: ${error.message}`)
+          cleanupCode = 1
+        }
       }
     }
     return cleanupCode === 0 && !proxyReleased ? 1 : cleanupCode
@@ -84,22 +94,33 @@ export function checkoutComposeLifecycle(
 
   // This covers synchronous setup failures after the lifecycle has been created. `stop` is
   // idempotent, so the normal run path can tear down first without doing duplicate work here.
+  // Preflight installs lease cleanup first. Move it after stack cleanup so a new start cannot
+  // claim this checkout while the old runner is still removing its containers and route.
+  if (state.runner) runtime.process.removeListener('exit', state.runner.release)
   runtime.process.once('exit', stop)
+  if (state.runner) runtime.process.once('exit', state.runner.release)
 
   /** Runs one foreground Compose action and resolves after the full stack has been removed. */
   async function run(args) {
     if (running) throw new Error('devkit: a checkout Compose lifecycle can only run once')
+    if (stopped) throw new Error('devkit: a stopped checkout Compose lifecycle cannot run')
     running = true
 
-    const child = runtime.spawn(
-      invocation.command,
-      [...invocation.args, ...args],
-      {
-        cwd: invocation.cwd,
-        env: invocation.env,
-        stdio: 'inherit'
-      }
-    )
+    let child
+    try {
+      child = runtime.spawn(
+        invocation.command,
+        [...invocation.args, ...args],
+        {
+          cwd: invocation.cwd,
+          env: invocation.env,
+          stdio: 'inherit'
+        }
+      )
+    } catch (error) {
+      stop()
+      throw error
+    }
 
     let receivedSignal = null
     const signalHandlers = new Map()

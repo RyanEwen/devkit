@@ -18,21 +18,16 @@
  */
 import {
   mkdirSync,
-  readlinkSync,
   readFileSync,
   readdirSync,
   rmSync,
-  symlinkSync,
-  unlinkSync,
   writeFileSync
 } from 'node:fs'
-import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { composeContainers, composeDown, composeUp, infraComposeEnv } from './docker.mjs'
 
-const PROXY_LOCK_RETRIES = 4800
-const PROXY_LOCK_RETRY_MS = 25
+import { processIsAlive, withRuntimeLock } from './runtime-lock.mjs'
 
 /** One file per checkout, named from the slug so a stale file is obvious and safe to delete. */
 export function routeFilePath(config, identity) {
@@ -93,72 +88,6 @@ function proxyCompose(config) {
   }
 }
 
-/** True while a process id still belongs to a live host process. */
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid < 1) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === 'EPERM'
-  }
-}
-
-/**
- * Serializes route registration against last-user shutdown across independent project runners.
- *
- * The lock records its owner so an abruptly killed runner cannot block all future starts. Waiting
- * is synchronous because each protected operation is one short Compose invocation and callers are
- * already in synchronous host setup/teardown paths.
- */
-function withProxyLock(config, operation) {
-  mkdirSync(config.configDir, { recursive: true })
-  const lockPath = path.join(config.configDir, 'proxy.lock')
-  const owner = JSON.stringify({ pid: process.pid, token: randomUUID() })
-
-  for (let attempt = 0; attempt < PROXY_LOCK_RETRIES; attempt += 1) {
-    try {
-      // Symlink creation publishes the ownership token atomically: waiters can never observe the
-      // empty-file window created by opening an exclusive file and writing its contents afterward.
-      symlinkSync(owner, lockPath)
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error
-
-      let ownerPid = null
-      try {
-        const parsedOwner = JSON.parse(readlinkSync(lockPath))
-        if (Number.isInteger(parsedOwner?.pid)) ownerPid = parsedOwner.pid
-      } catch {
-        // A malformed lock is stale. No writer can be mid-publish because symlink creation is atomic.
-      }
-      if (ownerPid === null || !processIsAlive(ownerPid)) {
-        try {
-          unlinkSync(lockPath)
-        } catch {
-          // Another waiter may have recovered the same stale lock first.
-        }
-        continue
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, PROXY_LOCK_RETRY_MS)
-      continue
-    }
-
-    try {
-      return operation()
-    } finally {
-      // Only remove the lock this invocation created. This guards against a stale-lock recovery
-      // racing a paused owner that later resumes after another process has acquired the path.
-      try {
-        if (readlinkSync(lockPath) === owner) unlinkSync(lockPath)
-      } catch {
-        // A missing lock is already released; teardown must not fail while reporting that fact.
-      }
-    }
-  }
-
-  throw new Error('devkit: timed out waiting for the shared proxy lifecycle lock')
-}
-
 /** Derives the Compose project used by an unleased route from its generated hostname. */
 function legacyComposeProject(contents) {
   const hostname = contents.match(/Host\(`([^`]+)\.localhost`\)/)?.[1]
@@ -210,7 +139,7 @@ function registeredRoutes(config, { containers = composeContainers } = {}) {
  * Compose fails, the route is rolled back so a failed start cannot keep Docker Desktop awake.
  */
 export function acquireProxy(config, identity, port, { start = composeUp } = {}) {
-  return withProxyLock(config, () => {
+  return withRuntimeLock(config, 'proxy', () => {
     writeRoute(config, identity, port)
     const compose = proxyCompose(config)
     const started = start(compose.project, compose.files, {
@@ -230,7 +159,7 @@ export function acquireProxy(config, identity, port, { start = composeUp } = {})
  * working while still allowing a machine with no routes at all to become fully idle.
  */
 export function releaseProxy(config, identity, { stop = composeDown, containers = composeContainers } = {}) {
-  return withProxyLock(config, () => {
+  return withRuntimeLock(config, 'proxy', () => {
     removeRoute(config, identity)
     if (registeredRoutes(config, { containers }).length > 0) return true
 
@@ -252,7 +181,7 @@ export function reconcileProxy(
   config,
   { start = composeUp, stop = composeDown, containers = composeContainers } = {}
 ) {
-  return withProxyLock(config, () => {
+  return withRuntimeLock(config, 'proxy', () => {
     const compose = proxyCompose(config)
     const running = registeredRoutes(config, { containers }).length > 0
     const action = running ? start : stop

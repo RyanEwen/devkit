@@ -253,6 +253,7 @@ test('disabled Devkit ignores browser options instead of breaking the host runne
   try {
     assert.equal(await preflight({ repoRoot: '/missing-checkout' }), null)
     assert.equal(await preflight({ repoRoot: '/missing-checkout', openBrowser: 'unsupported' }), null)
+    assert.equal(await preflight({ repoRoot: '/missing-checkout', background: true, teardown: true }), null)
   } finally {
     if (previousFlag === undefined) delete process.env.DEVKIT
     else process.env.DEVKIT = previousFlag

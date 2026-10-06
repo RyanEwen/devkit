@@ -77,7 +77,8 @@ import {
   preflight
 } from '@ryanewen/devkit'
 
-const state = await preflight({ repoRoot })
+const teardown = process.argv.includes('--down')
+const state = await preflight({ repoRoot, teardown })
 const invocation = checkoutCompose(state, {
   projectDirectory: repoRoot,
   files: [path.join(repoRoot, 'compose.dev.yml')],
@@ -89,7 +90,7 @@ const invocation = checkoutCompose(state, {
 })
 const lifecycle = checkoutComposeLifecycle(state, invocation)
 
-if (process.argv.includes('--down')) process.exit(lifecycle.stop())
+if (teardown) process.exit(lifecycle.stop())
 process.exit(await lifecycle.run(['up', '--remove-orphans']))
 ```
 
@@ -98,6 +99,28 @@ and removes the shared proxy after the final route closes. Named volumes are pre
 `profiles` when profiled services also belong to the stack. Pass `teardown: true` to preflight for
 a `down` path so stopping a checkout does not start it first. Routes carry their runner's process
 identity, so the next lifecycle operation removes stale routes left by an abrupt process exit.
+
+Only one development runner can own a checkout at a time. A second start fails before changing
+dependencies, containers, or routes; other worktrees still run independently. A killed runner's
+lease is recovered on the next start.
+
+To leave development running after the terminal closes, pass `--background`:
+
+```bash
+npm run dev -- --background
+npm run dev -- --down
+```
+
+Background mode detaches the same Node runner, keeps its arguments and environment, and writes
+output to `<devkit config directory>/logs/<checkout slug>.log`. The starting command reports the
+runner PID and log path after preflight succeeds; application readiness still depends on the
+project's startup and health checks. Startup failures return an error pointing to that log.
+`--down` gracefully stops the existing runner before tearing down its stack. Runners must forward
+that choice with `preflight({ repoRoot, teardown: true })` if arguments are consumed in another
+process; preflight recognizes `--down` in its own process automatically. Background
+mode can also be requested with `preflight({ repoRoot, background: true })`; it exits the invoking
+process after the child finishes preflight. It requires a Node file entry point and cannot be
+combined with teardown. Devkit's off switch still takes precedence over these options.
 
 Starting development leaves the browser alone by default, even when `browser` is configured.
 Pass `--open` to the project's dev runner to request opening after its health check succeeds:

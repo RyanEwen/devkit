@@ -14,23 +14,30 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function fixture({ downStatus = 0 } = {}) {
+function fixture({ downStatus = 0, spawnError = null, downError = null } = {}) {
   const child = new FakeChild()
   const processTarget = new EventEmitter()
   const calls = []
   const releases = []
+  const leaseEvents = []
+  const runner = { release() { leaseEvents.push('lease-released') } }
+  processTarget.once('exit', runner.release)
   const runtime = {
     process: processTarget,
     spawn(command, args, options) {
+      if (spawnError) throw spawnError
       calls.push({ type: 'spawn', command, args, options })
       return child
     },
     spawnSync(command, args, options) {
+      leaseEvents.push('stack-stopped')
+      if (downError) throw downError
       calls.push({ type: 'spawnSync', command, args, options })
       return { status: downStatus, signal: null }
     }
   }
   const state = {
+    runner,
     config: { routesDir: '/tmp/devkit-lifecycle-test-routes' },
     identity: { slug: 'app-test' }
   }
@@ -43,11 +50,13 @@ function fixture({ downStatus = 0 } = {}) {
 
   return {
     calls,
+    leaseEvents,
     child,
     lifecycle: checkoutComposeLifecycle(state, invocation, {
       profiles: ['slicer'],
       runtime,
       releaseProxy(config, identity) {
+        leaseEvents.push('proxy-released')
         releases.push({ config, identity })
         return true
       }
@@ -89,4 +98,27 @@ test('a failed cleanup changes a successful foreground result', async () => {
   child.emit('close', 0, null)
 
   assert.equal(await result, 17)
+})
+
+
+test('exit cleanup keeps ownership until the stack and proxy have stopped', () => {
+  const { leaseEvents, processTarget } = fixture()
+  processTarget.emit('exit')
+  assert.deepEqual(leaseEvents.slice(0, 3), ['stack-stopped', 'proxy-released', 'lease-released'])
+})
+
+test('synchronous runner startup failure tears down the stack and releases ownership', async () => {
+  const error = new Error('spawn failed')
+  const { lifecycle, leaseEvents } = fixture({ spawnError: error })
+  await assert.rejects(lifecycle.run(['up']), error)
+  assert.deepEqual(leaseEvents, ['stack-stopped', 'proxy-released', 'lease-released'])
+})
+
+
+test('a thrown cleanup error returns failure and still releases the proxy and lease', async () => {
+  const { lifecycle, child, leaseEvents } = fixture({ downError: new Error('cleanup spawn failed') })
+  const result = lifecycle.run(['up'])
+  child.emit('close', 0, null)
+  assert.equal(await result, 1)
+  assert.deepEqual(leaseEvents, ['stack-stopped', 'proxy-released', 'lease-released'])
 })

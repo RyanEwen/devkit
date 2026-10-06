@@ -13,6 +13,8 @@
  * Counterparts: `infra/compose.yml` (the lazily managed proxy) and each project's
  * `devkit.config.mjs` (which supplies the env its servers read).
  */
+import { isBackgroundChild, launchBackgroundRunner, reportBackgroundReady } from './background-runner.mjs'
+import { acquireCheckoutRunner, stopCheckoutRunner } from './checkout-runner.mjs'
 import { browserOpenTarget, checkoutBrowserUrls, scheduleBrowserOpen, validateBrowserTarget } from './browser.mjs'
 import { checkoutIdentity, checkoutPorts, readGitCheckout } from './checkout-identity.mjs'
 import { checkoutDatabase, checkoutHostDatabase, devkitConfig } from './config.mjs'
@@ -48,13 +50,16 @@ export class PreflightError extends Error {
  * migrations, which is why this is called before that step rather than alongside it.
  * `openBrowser` accepts true/auto, native, or vscode; by default only --open or
  * DEVKIT_OPEN_BROWSER explicitly requests a tab. False suppresses opening for this call.
+ * `background` (or --background) re-executes the runner detached and exits the invoking process
+ * after child preflight succeeds. Each enabled checkout permits only one runner at a time.
  */
 export async function preflight({
   repoRoot,
   log = console.log,
   checkDependencies = true,
-  teardown = false,
-  openBrowser
+  teardown = process.argv.includes('--down'),
+  openBrowser,
+  background = process.argv.includes('--background')
 }) {
   const hostConfig = devkitConfig()
   if (!hostConfig) return null
@@ -62,6 +67,35 @@ export async function preflight({
   const checkout = checkoutIdentity(repoRoot)
   if (!checkout) return null
 
+  const backgroundChild = isBackgroundChild()
+  if (teardown && background) {
+    throw new PreflightError('--background cannot be combined with teardown')
+  }
+  if (background && !backgroundChild) {
+    const launched = await launchBackgroundRunner(hostConfig, checkout)
+    log?.(`[devkit] background runner started (PID ${launched.pid}); log: ${launched.logPath}`)
+    process.exit(0)
+  }
+
+  if (teardown) await stopCheckoutRunner(hostConfig, checkout)
+  const runner = acquireCheckoutRunner(hostConfig, checkout)
+  try {
+    const result = await prepareDevState({
+      hostConfig, checkout, repoRoot, log, checkDependencies, teardown, openBrowser
+    })
+    result.runner = runner
+    if (backgroundChild) reportBackgroundReady()
+    return result
+  } catch (error) {
+    runner.release()
+    throw error
+  }
+}
+
+/** Repairs the checkout's preconditions only after its runner has reserved exclusive ownership. */
+async function prepareDevState({
+  hostConfig, checkout, repoRoot, log, checkDependencies, teardown, openBrowser
+}) {
   // Preserve Devkit's off switch and keep teardown independent of opening requests.
   const browserTarget = teardown
     ? false
