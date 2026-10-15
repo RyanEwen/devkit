@@ -51,6 +51,7 @@ import { runDoctor } from '../src/doctor.mjs'
 import { waitForDatabase } from '../src/preflight.mjs'
 import { prepareCheckout } from '../src/checkout-prepare.mjs'
 import { enterProjectRuntime, runProjectCommand } from '../src/project-runtime.mjs'
+import { cleanupCheckout } from '../src/checkout-cleanup.mjs'
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = process.cwd()
@@ -341,6 +342,15 @@ try {
 }
 
 switch (command) {
+  case 'cleanup':
+    try {
+      const unknown = args.find((arg) => !['--yes', '--paseo'].includes(arg))
+      if (unknown) throw new Error(`unknown cleanup option: ${unknown}`)
+      await cleanupCheckout({ repoRoot, config: requireConfig(), yes: args.includes('--yes'), paseo: args.includes('--paseo') })
+    } catch (error) {
+      fail(error.message)
+    }
+    break
   case 'run':
     try {
       runProjectCommand(args)
@@ -387,6 +397,7 @@ its own database and its own ports, all derived from its path.
   devkit snapshot     capture this checkout's dev data as the baseline new ones clone
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)
   devkit prune        drop databases whose worktree is gone (--yes to actually drop)
+  devkit cleanup      preview private worktree resource removal (--yes removes; --paseo checks active references)
   devkit infra        start the proxy + this checkout's database (proxy only outside a repo)
   devkit nginx        print nginx configuration for the configured domains and public port
 

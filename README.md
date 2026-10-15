@@ -275,12 +275,39 @@ without starting the proxy, checking other projects, restoring data, or opening 
 | `devkit snapshot` | capture this checkout as the baseline for new worktrees |
 | `devkit reset` | rebuild a worktree database from its baseline (`--empty` skips it) |
 | `devkit prune` | find orphaned checkout database volumes (`--yes` removes them) |
+| `devkit cleanup` | preview private linked-worktree resources; `--yes` permanently removes them |
 | `devkit infra` | start the proxy and current checkout database |
 | `devkit nginx` | print nginx configuration for the configured machine domains |
 | `devproxy add <name> <port>` | route any host process through `<name>.localhost` |
 
 `devkit reset` refuses to reset the primary checkout. Port blocks and Compose project names are
 derived from checkout paths; no allocation registry or shared database profile exists.
+
+Keep ordinary `dev:down` non-destructive. For permanent worktree removal, add
+`"dev:cleanup": "devkit cleanup --yes"` to the project's npm scripts. Cleanup gracefully stops
+the checkout runner, removes its Compose-labelled containers and networks, releases its proxy
+route, and deletes its private database volume. It refuses primary checkouts and never removes
+the Git worktree itself, baseline snapshots, images, or shared caches.
+
+Declare additional **private** volumes in `devkit.config.mjs`, for example:
+
+```js
+cleanup: { volumes: ['{project}_slicer-data', '{project}_slicer-work'] }
+```
+
+Names must start with `{project}-` or `{project}_`; cleanup also verifies each existing volume's
+Compose project label. Shared engine caches, CLI credentials, and other repositories' volumes
+must never appear here. Docker refuses removal of any volume still mounted by a container.
+
+For Paseo, set `worktree.teardown` to
+`node "$PASEO_SOURCE_CHECKOUT_PATH/node_modules/@ryanewen/devkit/bin/devkit.mjs" cleanup --paseo --yes`.
+The source checkout CLI works even when worktree setup failed before installing dependencies.
+`--paseo` requires the matching teardown environment and queries all active workspaces, including
+background workspaces, before stopping anything and again before deleting data. Remaining
+references preserve resources; an unavailable or malformed query fails closed. The CLI uses
+`PASEO_HOME`/`PASEO_HOST` and discovers `paseo-plus-plus` or `paseo` on PATH (`PASEO_CLI` overrides
+the executable). Paseo remains responsible for the final reference check and directory removal.
+Do not reopen a worktree while its archive operation is running.
 
 A permanent route created with `devproxy add` is also a proxy consumer. Traefik remains running
 until that route is removed with `devproxy rm`, even when no checkout projects are active.

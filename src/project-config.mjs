@@ -40,6 +40,8 @@ const DEFAULTS = {
   worktreeFiles: [],
   /** Optional checkout-local dependency install, repaired before development infrastructure starts. */
   install: null,
+  /** Additional private Docker volumes removed on archive; names must start with {project}. */
+  cleanup: { volumes: [] },
   /** Other Devkit projects that must already answer before this project starts. */
   dependencies: [],
   /** Browser destination and readiness probe used only when the runner requests opening. */
@@ -94,6 +96,11 @@ function validate(config) {
     fail('`worktreeFiles` must be an array of repo-relative paths')
   }
   if (config.install != null) validateInstall(config.install)
+  if (!config.cleanup || typeof config.cleanup !== 'object' || Array.isArray(config.cleanup) ||
+      !Array.isArray(config.cleanup.volumes) || config.cleanup.volumes.some((name) =>
+        typeof name !== 'string' || !/^\{project\}[-_][a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name))) {
+    fail('`cleanup.volumes` must contain private volume names beginning with "{project}-" or "{project}_"')
+  }
   if (!Array.isArray(config.dependencies)) fail('`dependencies` must be an array')
   for (const dependency of config.dependencies) {
     if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) {

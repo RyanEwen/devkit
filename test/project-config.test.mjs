@@ -20,6 +20,7 @@ test('a project with no config gets defaults rather than an error', async () => 
   assert.deepEqual(config.baselinePaths, [])
   assert.deepEqual(config.worktreeFiles, [])
   assert.equal(config.install, null)
+  assert.deepEqual(config.cleanup, { volumes: [] })
   assert.deepEqual(config.dependencies, [])
   assert.equal(config.browser, null)
   assert.equal(config.configPath, null)
@@ -69,6 +70,8 @@ test('env receives the derived context and returns the project\'s own variables'
 // Every one of these silently changes which ports or database a checkout uses, so they must fail
 // loudly at load rather than produce a subtly different environment.
 test('a malformed config is rejected with a message naming the field', async () => {
+  await assert.rejects(withConfig('export default { cleanup: { volumes: ["shared-cache"] } }'), /`cleanup.volumes`/)
+  await assert.rejects(withConfig('export default { cleanup: { volumes: ["{project}-../foreign"] } }'), /`cleanup.volumes`/)
   await assert.rejects(withConfig('export default { ports: "web" }'), /`ports` must be an array/)
   await assert.rejects(withConfig('export default { ports: [] }'), /at least one port/)
   await assert.rejects(withConfig('export default { ports: ["web", "web"] }'), /must not repeat/)
