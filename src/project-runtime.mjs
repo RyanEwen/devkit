@@ -83,6 +83,9 @@ export function enterProjectRuntime(repoRoot) {
   if (!runtime) return
   if (runtime.switched) {
     console.error(`[devkit] selecting Node ${runtime.version}, npm ${runtime.npmVersion} from .nvmrc`)
+    // This process only waits for the selected runtime. Linux ownership checks must not mistake
+    // a runner path in its arguments for an additional application process.
+    process.title = 'devkit runtime launcher'
     finishCommand(spawnSync(runtime.node, [...process.execArgv, ...process.argv.slice(1)], {
       env: runtime.env, stdio: 'inherit'
     }))
@@ -103,6 +106,7 @@ export function assertProjectRuntime(repoRoot) {
 /** Runs argv directly under the selected PATH; shell metacharacters remain literal arguments. */
 export function runProjectCommand(argv) {
   if (!argv.length) throw new Error('usage: devkit run <command> [arguments...]')
+  process.title = 'devkit command launcher'
   finishCommand(spawnSync(argv[0], argv.slice(1), { stdio: 'inherit', shell: process.platform === 'win32' }))
 }
 

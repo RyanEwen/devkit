@@ -139,3 +139,15 @@ test('library preparation rejects an unavailable runtime before loading project 
     loadProject: () => assert.fail('must validate runtime before loading or preparing the project')
   }), /not installed/u)
 })
+
+test('a launcher waiting for a command is distinguishable from that command in Linux process inspection', { skip: process.platform !== 'linux' }, () => {
+  const root = fixture(process.versions.node)
+  const output = path.join(root, 'parent.json')
+  const runner = path.join(root, 'run-dev.mjs')
+  writeFileSync(runner, `import fs from 'node:fs'; fs.writeFileSync(process.argv[2], JSON.stringify(fs.readFileSync('/proc/' + process.ppid + '/cmdline', 'utf8').split('\\0').filter(Boolean)))`)
+  const result = spawnSync(process.execPath, [new URL('../bin/devkit.mjs', import.meta.url).pathname, 'run', 'node', runner, output], {
+    cwd: root, encoding: 'utf8'
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), ['devkit command launcher'])
+})
