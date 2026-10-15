@@ -50,6 +50,7 @@ import { bootstrapSettings, nginxConfig, traefikConfig } from '../src/host-setup
 import { runDoctor } from '../src/doctor.mjs'
 import { waitForDatabase } from '../src/preflight.mjs'
 import { prepareCheckout } from '../src/checkout-prepare.mjs'
+import { enterProjectRuntime, runProjectCommand } from '../src/project-runtime.mjs'
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = process.cwd()
@@ -332,7 +333,21 @@ async function prepare() {
 
 const [command, ...args] = process.argv.slice(2)
 
+// Select before preparation or service ownership, including in non-interactive worktree hooks.
+try {
+  if (command) enterProjectRuntime(repoRoot)
+} catch (error) {
+  fail(error.message)
+}
+
 switch (command) {
+  case 'run':
+    try {
+      runProjectCommand(args)
+    } catch (error) {
+      fail(error.message)
+    }
+    break
   case 'bootstrap':
     bootstrap(args)
     break
@@ -367,6 +382,7 @@ its own database and its own ports, all derived from its path.
 
   devkit bootstrap    configure the machine proxy and database definitions
   devkit prepare      materialize this checkout's local files and dependencies
+  devkit run <cmd>    run a command using this checkout's .nvmrc and pinned npm
   devkit doctor       the state of every precondition, and the command that fixes each
   devkit snapshot     capture this checkout's dev data as the baseline new ones clone
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)

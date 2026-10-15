@@ -14,6 +14,7 @@ import {
 import { readGitCheckout } from './checkout-identity.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
+import { assertProjectRuntime } from './project-runtime.mjs'
 
 /**
  * Materializes the current checkout's ignored project files and declared dependency install.
@@ -32,6 +33,7 @@ export async function prepareCheckout({
   const checkout = readCheckout(repoRoot)
   if (!checkout) return null
 
+  assertProjectRuntime(repoRoot)
   const project = await loadProject(repoRoot)
   const inherited = copyFiles({ checkout, project })
   for (const relativePath of inherited.copied) {

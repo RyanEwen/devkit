@@ -243,6 +243,25 @@ original tree. Devkit adds the short-lived backup pattern to Git's local exclude
 so projects do not need to commit a tool-specific ignore rule. This lets a worktree start with shared
 dependencies while still guaranteeing that source-mounted containers receive a real local directory.
 
+### Pinned host runtimes
+
+Devkit CLI commands respect the current checkout's `.nvmrc`, including non-interactive worktree
+hooks. They select an already-installed runtime from `NVM_DIR` (default `~/.nvm`), put its tools
+first on PATH, and check exact npm pins in `package.json`. Installed nvm aliases are supported;
+exact versions make setup reproducible. Missing runtimes or conflicting pins stop before installs
+or infrastructure changes. Devkit never installs Node/npm or changes nvm's default.
+
+Use `devkit run npm run dev` to select the runtime before a project runner starts. A Paseo setup
+hook can invoke `node "$PASEO_SOURCE_CHECKOUT_PATH/node_modules/@ryanewen/devkit/bin/devkit.mjs" prepare`
+when the new worktree has no dependencies yet; `prepare` selects the target worktree's runtime.
+Apply the same launcher to dev, teardown, build and agent-hook commands. Projects without `.nvmrc`
+retain their invoking runtime.
+
+Library calls to `preflight`, `prepareDatabase` and `prepareCheckout` validate the executing runtime
+before preparing dependencies. They fail with an actionable message instead of replaying a runner
+that might already hold a checkout lease. Command entrypoints own runtime selection. A stale outer
+npm identity is cleared so preparation and startup use the same dependency fingerprint.
+
 Host-side tools that need only the database can call `prepareDatabase({ repoRoot })`. It installs
 declared checkout dependencies, starts and provisions the database, and returns its loopback URL
 without starting the proxy, checking other projects, restoring data, or opening a browser.
@@ -251,6 +270,7 @@ without starting the proxy, checking other projects, restoring data, or opening 
 
 | Command | Purpose |
 | --- | --- |
+| `devkit run <command> [arguments...]` | run host tooling with the checkout's pinned Node/npm |
 | `devkit doctor` | inspect this checkout's proxy, container, database, baseline, and dependencies |
 | `devkit snapshot` | capture this checkout as the baseline for new worktrees |
 | `devkit reset` | rebuild a worktree database from its baseline (`--empty` skips it) |

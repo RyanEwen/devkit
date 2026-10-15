@@ -35,6 +35,7 @@ import { dependencyOrigins, failedProjectDependencies } from './project-dependen
 import { acquireProxy } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
 import { checkoutHostnames, checkoutOrigins, publicOrigin, proxyRequest } from './host-routing.mjs'
+import { assertProjectRuntime } from './project-runtime.mjs'
 
 /** Fails the run with a message that names the fix, rather than a stack trace. */
 export class PreflightError extends Error {
@@ -68,6 +69,7 @@ export async function preflight({
   const checkout = checkoutIdentity(repoRoot, hostConfig)
   if (!checkout) return null
 
+  assertProjectRuntime(repoRoot)
   const backgroundChild = isBackgroundChild()
   if (teardown && background) {
     throw new PreflightError('--background cannot be combined with teardown')
@@ -278,6 +280,7 @@ export async function prepareDatabase({ repoRoot, log = console.log }) {
   const checkout = checkoutIdentity(repoRoot, hostConfig)
   if (!checkout) return null
 
+  assertProjectRuntime(repoRoot)
   const project = await loadProjectConfig(repoRoot)
   if (!project.database.hostAccess) {
     throw new PreflightError(
