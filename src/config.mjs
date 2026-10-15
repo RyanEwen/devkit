@@ -22,6 +22,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { normalizeHostRouting } from './host-routing.mjs'
+
 /**
  * `~/.config/devkit/`, honouring XDG_CONFIG_HOME.
  *
@@ -64,13 +66,15 @@ export function devkitConfig({ warn = console.warn, containerCheck = inContainer
   if (!existsSync(markerPath)) return null
 
   let marker
+  let routing
   try {
     marker = JSON.parse(readFileSync(markerPath, 'utf8'))
+    if (marker?.enabled === false) return null
+    routing = normalizeHostRouting(marker)
   } catch (error) {
     warn(`[dev] ignoring ${markerPath}: ${error.message}`)
     return null
   }
-  if (marker?.enabled === false) return null
 
   const configDir = devkitConfigDir()
   return {
@@ -80,7 +84,7 @@ export function devkitConfig({ warn = console.warn, containerCheck = inContainer
     infraDir: path.join(configDir, 'infra'),
     routesDir: path.join(configDir, 'routes'),
     baselineDir: path.join(configDir, 'baselines'),
-    proxyPort: 80,
+    ...routing,
     postgres: { user: 'postgres', password: 'postgres' },
     mariadb: { user: 'root', password: 'root' },
     baselineMaxAgeDays: 14

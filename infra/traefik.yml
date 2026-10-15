@@ -4,9 +4,9 @@
 # on the HOST, which Docker cannot discover. `scripts/dev/host-mode/proxy.mjs` writes one file per
 # running checkout into the watched directory; Traefik hot-reloads, so no restart is ever needed.
 #
-# Plain HTTP only, and that is not a limitation to fix. Browsers treat `*.localhost` as a
-# potentially-trustworthy origin, so service workers, WebAuthn and crypto.subtle all work over
-# http:// here, and adding TLS would mean a local CA that Windows and WSL both have to trust.
+# The private upstream is HTTP. Browsers trust HTTP on *.localhost; remote secondary domains
+# can use HTTPS terminated by an existing nginx server, with their public scheme configured
+# in host.json. Bootstrap renders the entry point address for optional native Linux host mode.
 
 entryPoints:
   web:

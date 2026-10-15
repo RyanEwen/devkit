@@ -34,6 +34,7 @@ import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, failedProjectDependencies } from './project-dependencies.mjs'
 import { acquireProxy } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
+import { checkoutHostnames, checkoutOrigins, publicOrigin, proxyRequest } from './host-routing.mjs'
 
 /** Fails the run with a message that names the fix, rather than a stack trace. */
 export class PreflightError extends Error {
@@ -64,7 +65,7 @@ export async function preflight({
   const hostConfig = devkitConfig()
   if (!hostConfig) return null
 
-  const checkout = checkoutIdentity(repoRoot)
+  const checkout = checkoutIdentity(repoRoot, hostConfig)
   if (!checkout) return null
 
   const backgroundChild = isBackgroundChild()
@@ -163,7 +164,7 @@ async function prepareDevState({
     lines.push(`baseline is ${Math.floor(age)} days old -- \`devkit snapshot\` refreshes it`)
   }
 
-  const url = `http://${identity.hostname}${config.proxyPort === 80 ? '' : `:${config.proxyPort}`}`
+  const url = publicOrigin(identity.hostname, config)
   const engine = project.database.engine
   const database = checkoutDatabase(config, identity.databaseName, engine)
   const databaseUrl = database.url
@@ -171,10 +172,12 @@ async function prepareDevState({
     identity,
     ports,
     url,
+    urls: checkoutOrigins(identity, config),
+    domain: config.preferredDomain,
     directUrl: `http://localhost:${ports.web}`,
     database,
     databaseUrl,
-    dependencyOrigins: dependencyOrigins(project.dependencies, config.proxyPort),
+    dependencyOrigins: dependencyOrigins(project.dependencies, config),
     configDir: config.configDir
   }
 
@@ -199,12 +202,14 @@ async function prepareDevState({
       )
     }
     log?.(`[devkit] proxy and checkout database ready (${project.database.engine}:${config.databaseRuntime.version})`)
+    for (const alternate of context.urls.slice(1)) log?.(`[devkit] alternate URL: ${alternate}`)
   }
 
   // Teardown must not schedule a fresh browser tab while it removes the route and containers.
   if (browserTarget && project.browser && checkDependencies && !teardown) {
     const browser = checkoutBrowserUrls(url, project.browser)
-    scheduleBrowserOpen(browser.openUrl, browser.healthUrl, { target: browserTarget })
+    const health = proxyRequest(browser.healthUrl, config)
+    scheduleBrowserOpen(browser.openUrl, health.url, { target: browserTarget, headers: health.headers })
   }
 
   return result
@@ -212,7 +217,7 @@ async function prepareDevState({
 
 /** Verifies declared applications are alive but deliberately never starts or manages them. */
 async function requireProjectDependencies(config, project) {
-  const failures = await failedProjectDependencies(project.dependencies, { proxyPort: config.proxyPort })
+  const failures = await failedProjectDependencies(project.dependencies, { config })
   if (failures.length === 0) return
 
   const failed = failures.map(({ dependency, url, detail }) => `${dependency.name} at ${url} (${detail})`).join(', ')
@@ -230,11 +235,12 @@ async function requireProjectDependencies(config, project) {
  * two Vite settings that the PROXY requires rather than the project. Everything else is the
  * project's to name, because only it knows which variables its servers read.
  */
-function baseEnv({ identity, ports, url, databaseUrl }) {
+function baseEnv({ identity, ports, url, urls, databaseUrl }) {
   return {
     DATABASE_URL: databaseUrl,
     DEVKIT_URL: url,
     DEVKIT_HOSTNAME: identity.hostname,
+    DEVKIT_URLS: JSON.stringify(urls),
     /**
      * The proxy reaches this checkout over `host.docker.internal`, and Docker Desktop's forwarding
      * on Windows/WSL only relays IPv4-bound listeners: Vite's `host: true` binds the IPv6 wildcard,
@@ -244,7 +250,7 @@ function baseEnv({ identity, ports, url, databaseUrl }) {
      */
     VITE_DEV_HOST: '0.0.0.0',
     /** Vite rejects an unknown Host header, and every request arrives from the proxy carrying it. */
-    VITE_DEV_ALLOWED_HOSTS: [identity.hostname, 'localhost', '127.0.0.1'].join(',')
+    VITE_DEV_ALLOWED_HOSTS: [...checkoutHostnames(identity), 'localhost', '127.0.0.1'].join(',')
   }
 }
 
@@ -269,7 +275,7 @@ export async function prepareDatabase({ repoRoot, log = console.log }) {
   const hostConfig = devkitConfig()
   if (!hostConfig) return null
 
-  const checkout = checkoutIdentity(repoRoot)
+  const checkout = checkoutIdentity(repoRoot, hostConfig)
   if (!checkout) return null
 
   const project = await loadProjectConfig(repoRoot)

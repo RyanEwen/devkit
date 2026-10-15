@@ -1,0 +1,12 @@
+# Native Linux option: reach checkout application ports published only to host loopback.
+# The entry point in traefik.yml binds the explicitly configured private interface and port.
+services:
+  proxy:
+    image: traefik:v3
+    restart: "no"
+    network_mode: host
+    volumes:
+      - ${DEVKIT_ROUTES_DIR:?routes directory must be set}:/routes:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+    extra_hosts:
+      - "host.docker.internal:127.0.0.1"

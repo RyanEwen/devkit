@@ -1,6 +1,6 @@
 const vscode = require('vscode')
 
-const { isAllowedProjectUrl } = require('./url.cjs')
+const { configuredDomains, isAllowedProjectUrl } = require('./url.cjs')
 
 const extensionId = 'ryanewen.devkit-browser'
 const browserUriVariable = 'DEVKIT_VSCODE_BROWSER_URI'
@@ -9,7 +9,7 @@ async function handleUri(uri) {
   if (uri.path !== '/open') return
 
   const target = new URLSearchParams(uri.query).get('url')
-  if (!target || !isAllowedProjectUrl(target)) return
+  if (!target || !isAllowedProjectUrl(target, configuredDomains())) return
 
   const commands = await vscode.commands.getCommands(true)
   const command = commands.includes('workbench.action.browser.open')

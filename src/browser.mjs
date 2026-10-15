@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { fetchHealth } from './health-request.mjs'
 
 const modulePath = fileURLToPath(import.meta.url)
 const bridgeManifestUrl = new URL('../vscode-extension/package.json', import.meta.url)
@@ -49,10 +50,12 @@ export function isVsCodeTerminal(env = process.env) {
 }
 
 /** Starts a detached waiter so preflight never delays the project's actual server process. */
-export function scheduleBrowserOpen(openUrl, healthUrl, { target = false, spawnImpl = spawn, env = process.env } = {}) {
+export function scheduleBrowserOpen(openUrl, healthUrl, { target = false, headers, spawnImpl = spawn, env = process.env } = {}) {
   target = validateBrowserTarget(target)
   if (!target) return false
-  const child = spawnImpl(process.execPath, [modulePath, '--wait', openUrl, healthUrl, target], {
+  const args = [modulePath, '--wait', openUrl, healthUrl, target]
+  if (headers) args.push(JSON.stringify(headers))
+  const child = spawnImpl(process.execPath, args, {
     detached: true,
     env,
     // Keep readiness timeouts and failed handoffs visible for every requested browser.
@@ -162,6 +165,12 @@ export function openBrowser(url, {
     log('[devkit] integrated browser bridge unavailable; opening the desktop browser instead')
   }
 
+  if (!integrated && platform === 'linux' && (env.SSH_CONNECTION || env.SSH_TTY)
+    && !env.DISPLAY && !env.WAYLAND_DISPLAY && !vsCodeBrowserHelper(env, { existsSyncImpl })) {
+    log(`[devkit] Open in your browser: ${url}`)
+    return 'printed'
+  }
+
   const { command, args } = integrated ?? browserCommand(url, { platform, env, existsSyncImpl })
   const browser = spawnImpl(command, args, { detached: true, stdio: 'ignore', windowsHide: true })
   browser.on?.('error', (error) => {
@@ -174,10 +183,11 @@ export function openBrowser(url, {
 /** Polls readiness with a bounded deadline, then performs one browser handoff. */
 async function waitAndOpen(openUrl, healthUrl, {
   target = 'auto',
-  fetchImpl = fetch,
+  fetchImpl = fetchHealth,
   spawnImpl = spawn,
   log = console.log,
   env = process.env,
+  headers,
   timeoutMs = 120_000,
   pollMs = 500
 } = {}) {
@@ -186,6 +196,7 @@ async function waitAndOpen(openUrl, healthUrl, {
     let ready = false
     try {
       const response = await fetchImpl(healthUrl, {
+        ...(headers ? { headers } : {}),
         redirect: 'follow',
         signal: AbortSignal.timeout(2_000)
       })
@@ -205,7 +216,10 @@ async function waitAndOpen(openUrl, healthUrl, {
 
 if (process.argv[1] === modulePath && process.argv[2] === '--wait') {
   try {
-    await waitAndOpen(process.argv[3], process.argv[4], { target: process.argv[5] })
+    await waitAndOpen(process.argv[3], process.argv[4], {
+      target: process.argv[5],
+      headers: process.argv[6] ? JSON.parse(process.argv[6]) : undefined
+    })
   } catch (error) {
     console.error(`[devkit] browser opening failed: ${error.message}`)
     process.exitCode = 1

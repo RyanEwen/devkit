@@ -19,6 +19,8 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 
+import { normalizeDomain } from './host-routing.mjs'
+
 /** Postgres limits names to 63 bytes; staying inside it also fits MariaDB's 64-character limit. */
 const POSTGRES_IDENTIFIER_LIMIT = 63
 
@@ -84,12 +86,21 @@ export function readGitCheckout(root = process.cwd()) {
  * The primary checkout keeps the bare database name (the repo name) so devkit adopts
  * the dev database you already have rather than starting you on an empty one.
  */
-export function deriveCheckoutIdentity(checkout) {
+export function deriveCheckoutIdentity(checkout, {
+  domain = 'localhost', secondaryDomains = [], preferredDomain = domain
+} = {}) {
+  domain = normalizeDomain(domain)
+  preferredDomain = normalizeDomain(preferredDomain)
+  const domains = [...new Set([domain, ...secondaryDomains.map(normalizeDomain)])]
+  if (!domains.includes(preferredDomain)) throw new Error('preferredDomain must be a configured domain')
   const commonDir = path.resolve(checkout.root ?? checkout.toplevel, checkout.gitCommonDir)
   const gitDir = path.resolve(checkout.root ?? checkout.toplevel, checkout.gitDir)
   const isPrimary = gitDir === commonDir
   const repoName = sanitizeLabel(path.basename(path.dirname(commonDir))) || 'repo'
   const worktreeName = isPrimary ? null : sanitizeLabel(path.basename(gitDir)) || 'worktree'
+  const name = isPrimary ? repoName : `${worktreeName}.${repoName}`
+  const secondaryHostnames = domains.filter((suffix) => suffix !== preferredDomain)
+    .map((suffix) => `${name}.${suffix}`)
 
   return {
     repoName,
@@ -97,7 +108,8 @@ export function deriveCheckoutIdentity(checkout) {
     isPrimary,
     toplevel: checkout.toplevel,
     /** Browser origin host. Nested so a parent RP id can cover every worktree; see host-mode/README. */
-    hostname: isPrimary ? `${repoName}.localhost` : `${worktreeName}.${repoName}.localhost`,
+    hostname: `${name}.${preferredDomain}`,
+    ...(secondaryHostnames.length ? { secondaryHostnames } : {}),
     databaseName: isPrimary ? postgresIdentifier('', repoName) : postgresIdentifier(`${repoName}_wt_`, worktreeName),
     /** Namespaces containers/networks/volumes so one checkout's `compose down` cannot touch another. */
     composeProject: isPrimary ? repoName : `${repoName}-wt-${worktreeName}`,
@@ -107,9 +119,9 @@ export function deriveCheckoutIdentity(checkout) {
 }
 
 /** Convenience wrapper: git facts plus derivation, or `null` outside a git checkout. */
-export function checkoutIdentity(root = process.cwd()) {
+export function checkoutIdentity(root = process.cwd(), options) {
   const checkout = readGitCheckout(root)
-  return checkout ? deriveCheckoutIdentity(checkout) : null
+  return checkout ? deriveCheckoutIdentity(checkout, options) : null
 }
 
 /** The baseline template every new checkout's database is cloned from. One per clone. */

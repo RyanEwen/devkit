@@ -120,6 +120,28 @@ test('connection URLs use the selected backend and encode credentials', () => {
   })
 })
 
+test('host marker loads secondary domains and separate public and private ports', () => {
+  withConfigHome(() => {
+    const config = devkitConfig({ containerCheck: notInContainer })
+    assert.equal(config.domain, 'localhost')
+    assert.deepEqual(config.secondaryDomains, ['server.home'])
+    assert.equal(config.preferredDomain, 'server.home')
+    assert.equal(config.proxyPort, 18080)
+    assert.equal(config.publicPort, 80)
+  }, { marker: JSON.stringify({
+    enabled: true, secondaryDomains: ['server.home'], preferredDomain: 'server.home',
+    proxyPort: 18080, publicPort: 80
+  }) })
+})
+
+test('invalid host routing settings warn and disable Devkit rather than publishing bad routes', () => {
+  withConfigHome(() => {
+    const warnings = []
+    assert.equal(devkitConfig({ containerCheck: notInContainer, warn: (message) => warnings.push(message) }), null)
+    assert.match(warnings[0], /preferredDomain/)
+  }, { marker: JSON.stringify({ enabled: true, preferredDomain: 'unconfigured.home' }) })
+})
+
 test('host database descriptors replace only the internal container address', () => {
   const config = {
     postgres: { host: 'database', port: 5432, user: 'postgres', password: 'secret' },

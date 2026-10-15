@@ -6,16 +6,19 @@
  * has one contract: its Devkit hostname must already answer its configured health path.
  */
 
-/** The URL that Traefik should serve for an independently running project. */
-export function dependencyUrl(dependency, proxyPort = 80) {
-  const port = proxyPort === 80 ? '' : `:${proxyPort}`
-  return `http://${dependency.name}.localhost${port}${dependency.healthPath ?? '/'}`
+import { normalizeDomain, publicOrigin, proxyRequest } from './host-routing.mjs'
+import { fetchHealth } from './health-request.mjs'
+
+/** The browser-facing URL for an independently running project. */
+export function dependencyUrl(dependency, settings = {}) {
+  const domain = normalizeDomain(typeof settings === 'number' ? undefined : settings.preferredDomain ?? settings.domain)
+  return `${publicOrigin(`${dependency.name}.${domain}`, settings)}${dependency.healthPath ?? '/'}`
 }
 
 /** Origins exposed to project env functions, keyed by dependency name. */
-export function dependencyOrigins(dependencies, proxyPort = 80) {
+export function dependencyOrigins(dependencies, settings = {}) {
   return Object.fromEntries(
-    dependencies.map((dependency) => [dependency.name, new URL(dependencyUrl(dependency, proxyPort)).origin])
+    dependencies.map((dependency) => [dependency.name, new URL(dependencyUrl(dependency, settings)).origin])
   )
 }
 
@@ -25,12 +28,14 @@ export function dependencyOrigins(dependencies, proxyPort = 80) {
  */
 export async function probeProjectDependencies(
   dependencies,
-  { proxyPort = 80, fetchImpl = fetch, timeoutMs = 2_000 } = {}
+  { config, proxyPort = 80, fetchImpl = fetchHealth, timeoutMs = 2_000 } = {}
 ) {
   const probes = dependencies.map(async (dependency) => {
-    const url = dependencyUrl(dependency, proxyPort)
+    const url = dependencyUrl(dependency, config ?? proxyPort)
+    const request = config ? proxyRequest(url, config) : { url }
     try {
-      const response = await fetchImpl(url, {
+      const response = await fetchImpl(request.url, {
+        ...(request.headers ? { headers: request.headers } : {}),
         redirect: 'follow',
         signal: AbortSignal.timeout(timeoutMs)
       })

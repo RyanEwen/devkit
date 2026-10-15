@@ -28,6 +28,7 @@ import path from 'node:path'
 import { composeContainers, composeDown, composeUp, infraComposeEnv } from './docker.mjs'
 
 import { processIsAlive, withRuntimeLock } from './runtime-lock.mjs'
+import { checkoutHostnames } from './host-routing.mjs'
 
 /** One file per checkout, named from the slug so a stale file is obvious and safe to delete. */
 export function routeFilePath(config, identity) {
@@ -49,7 +50,7 @@ export function writeRoute(config, identity, port) {
 http:
   routers:
     ${name}:
-      rule: "Host(\`${identity.hostname}\`)"
+      rule: "${checkoutHostnames(identity).map((hostname) => `Host(\`${hostname}\`)`).join(' || ')}"
       service: ${name}
       entryPoints:
         - web
@@ -79,10 +80,10 @@ export function removeRoute(config, identity) {
 }
 
 /** Returns the installed Compose definition for the machine-wide proxy. */
-function proxyCompose(config) {
+export function proxyCompose(config) {
   return {
     project: config.infraProject,
-    files: [path.join(config.infraDir, 'compose.yml')],
+    files: [path.join(config.infraDir, config.proxyNetwork === 'host' ? 'compose.host.yml' : 'compose.yml')],
     cwd: config.infraDir,
     env: infraComposeEnv(config)
   }

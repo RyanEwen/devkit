@@ -10,7 +10,7 @@ worktree fix-123   -> http://fix-123.printstream.localhost
 game-is-up         -> http://game-is-up.localhost
 ```
 
-The only machine-wide service is Traefik on loopback port 80. It starts when the first routed
+By default, the only machine-wide service is Traefik on loopback port 80. It starts when the first routed
 project starts and is removed when the last route closes, allowing Docker Desktop to idle. Checkout
 stacks do not share Docker networks or databases. Inactive stacks keep only their named volumes.
 
@@ -24,6 +24,82 @@ npx devkit bootstrap
 Bootstrap installs the proxy and database Compose definitions under `~/.config/devkit` and writes
 the marker that enables Devkit. Devkit stays off inside containers, when
 `DEVKIT=0`, or before bootstrap.
+
+### Remote development and an existing nginx server
+
+Localhost remains the default domain. Machine settings can add secondary domains and choose one
+for printed URLs, browser opening, dependency origins, and application environment values. Every
+configured domain routes to the same checkout; changing a preference does not change application
+ports, database names, volumes, or Compose project names.
+
+For a host nginx server that already owns port 80:
+
+```bash
+devkit bootstrap --secondary-domain server.home --preferred-domain server.home \
+  --proxy-port 8080 --public-port 80
+devkit nginx --allow 192.168.2.0/24 > /tmp/devkit.conf
+```
+
+Install the generated file in nginx's `http` configuration, validate with `nginx -t`, and reload
+nginx. The generated rule preserves Host and WebSocket headers and disables response buffering.
+Exact nginx virtual hosts retain precedence, so an existing `speedtest.server.home` site can
+coexist with the wildcard. The base `server.home` site is not claimed by devkit. The generator
+permits loopback clients plus each subnet explicitly passed with `--allow`.
+
+Clients need DNS for `*.server.home` pointing to the server's LAN IP, including nested names such
+as `fix-123.printstream.server.home`. The default localhost aliases still resolve to the browser
+machine; use the secondary domain from a remote browser. Rerunning bootstrap preserves the saved
+settings. Restart existing runners after changing routing settings so their routes, Vite allowed
+hosts, and application origins are refreshed. Existing permanent `devproxy` routes can be refreshed
+by repeating `devproxy add <name> <port>`.
+
+On native Linux, checkout ports bound only to host loopback need Traefik's host networking mode.
+When nginx also runs in Docker, its loopback is separate from the host's. Bind Traefik to nginx's
+Docker bridge gateway, and use that private address as nginx's upstream. For example, if nginx's
+bridge gateway is `172.24.0.1`:
+
+```bash
+devkit bootstrap --secondary-domain server.home --preferred-domain server.home \
+  --proxy-network host --proxy-bind-address 172.24.0.1 \
+  --proxy-port 18080 --public-port 80
+devkit nginx --allow 192.168.2.0/24 --allow 172.24.0.1 > /tmp/devkit.conf
+```
+
+Use your actual bridge gateway and client subnet. Host networking requires Docker's host networking
+support; bridge mode remains the default. The host listener binds only the selected interface.
+
+The machine marker (`~/.config/devkit/host.json`, honoring `DEVKIT_CONFIG_DIR` and XDG) stores:
+
+```json
+{
+  "enabled": true,
+  "domain": "localhost",
+  "secondaryDomains": ["server.home"],
+  "preferredDomain": "server.home",
+  "proxyPort": 18080,
+  "publicPort": 80,
+  "publicScheme": "http",
+  "proxyNetwork": "host",
+  "proxyBindAddress": "172.24.0.1"
+}
+```
+
+Without `--preferred-domain`, secondary domains add aliases while localhost stays preferred.
+`--secondary-domain` can be repeated; providing it replaces the saved secondary-domain list.
+`preflight()` provides the preferred `url` and all configured `urls` (preferred first), also exposed
+as `DEVKIT_URL` and JSON-encoded `DEVKIT_URLS`. The `domain` context value is the preferred suffix
+for constructing sibling service hostnames without a runtime dependency. Projects that enforce browser origins should use
+`urls` to populate their own allowlist if they need both origins for cross-origin requests or auth.
+Vite's allowed hosts include every configured checkout hostname automatically. Browser storage,
+cookies, and authentication registrations remain specific to each origin.
+
+For HTTPS on nginx, set `--public-scheme https --public-port 443`. When generating the nginx file,
+also pass `--ssl-certificate` and `--ssl-certificate-key` with paths visible inside nginx. Certificates
+must be trusted by the browser and cover the configured names; a wildcard certificate covers one
+hostname level, so nested worktree names need additional coverage. Internal readiness checks use
+the private HTTP listener with the correct Host header and do not require LAN DNS or client CAs.
+Plain SSH sessions print the requested browser URL; VS Code Remote can use its existing client
+browser bridge.
 
 `devkit prepare` is the dependency-only entry point for a newly created checkout. It copies the
 project's declared `worktreeFiles` and materializes its declared checkout-local install without
@@ -180,6 +256,7 @@ without starting the proxy, checking other projects, restoring data, or opening 
 | `devkit reset` | rebuild a worktree database from its baseline (`--empty` skips it) |
 | `devkit prune` | find orphaned checkout database volumes (`--yes` removes them) |
 | `devkit infra` | start the proxy and current checkout database |
+| `devkit nginx` | print nginx configuration for the configured machine domains |
 | `devproxy add <name> <port>` | route any host process through `<name>.localhost` |
 
 `devkit reset` refuses to reset the primary checkout. Port blocks and Compose project names are

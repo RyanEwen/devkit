@@ -27,6 +27,7 @@ import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, probeProjectDependencies } from './project-dependencies.mjs'
 import { routeFilePath } from './proxy.mjs'
+import { checkoutOrigins, publicOrigin } from './host-routing.mjs'
 
 const OK = '+'
 const BAD = 'x'
@@ -56,7 +57,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     return 0
   }
 
-  const checkout = checkoutIdentity(repoRoot)
+  const checkout = checkoutIdentity(repoRoot, hostConfig)
   if (!checkout) {
     report(BAD, 'checkout', `${repoRoot} is not a git checkout`)
     return 1
@@ -69,7 +70,9 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   log('\ndevkit: ON\n')
   report(OK, 'checkout', `${identity.isPrimary ? 'primary' : `worktree ${identity.worktreeName}`} of ${identity.repoName}`)
   report(OK, 'config', project.configPath ?? 'no devkit.config.mjs, using defaults')
-  report(OK, 'url', `http://${identity.hostname}   (direct: http://localhost:${ports.web})`)
+  report(OK, 'url', `${publicOrigin(identity.hostname, config)}   (server-local: http://localhost:${ports.web})`)
+  for (const url of checkoutOrigins(identity, config).slice(1)) report(OK, 'alternate url', url)
+  report(OK, 'proxy listener', `${config.proxyBindAddress}:${config.proxyPort} (${config.proxyNetwork})`)
 
   const docker = probeDocker()
   if (!docker.ok) {
@@ -85,7 +88,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   if (proxyRunning.includes('proxy')) report(OK, 'proxy', `running in project ${config.infraProject}`)
   else report(BAD, 'proxy', 'not running', 'devkit infra')
 
-  for (const result of await probeProjectDependencies(project.dependencies, { proxyPort: config.proxyPort })) {
+  for (const result of await probeProjectDependencies(project.dependencies, { config })) {
     report(
       result.ok ? OK : BAD,
       `needs ${result.dependency.name}`,
@@ -155,8 +158,10 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     ports,
     config,
     database,
-    url: `http://${identity.hostname}`,
-    dependencyOrigins: dependencyOrigins(project.dependencies, config.proxyPort),
+    url: publicOrigin(identity.hostname, config),
+    urls: checkoutOrigins(identity, config),
+    domain: config.preferredDomain,
+    dependencyOrigins: dependencyOrigins(project.dependencies, config),
     repoRoot
   }
   for (const check of project.checks ?? []) {

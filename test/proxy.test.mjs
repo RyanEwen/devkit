@@ -64,6 +64,20 @@ test('rewriting a route replaces it rather than appending a second router', () =
   }
 })
 
+test('preferred remote routes retain localhost aliases on the same checkout service', () => {
+  const config = scratchConfig()
+  try {
+    const identity = { ...worktreeIdentity('fix'),
+      hostname: 'fix.printstream.server.home', secondaryHostnames: ['fix.printstream.localhost']
+    }
+    const contents = readFileSync(writeRoute(config, identity, 21000), 'utf8')
+    assert.match(contents, /Host\(`fix\.printstream\.server\.home`\) \|\| Host\(`fix\.printstream\.localhost`\)/)
+    assert.equal(contents.match(/loadBalancer:/g).length, 1)
+  } finally {
+    rmSync(config.configDir, { recursive: true, force: true })
+  }
+})
+
 test('two checkouts write separate files, so one cannot clobber the other', () => {
   const config = scratchConfig()
   try {

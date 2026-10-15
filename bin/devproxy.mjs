@@ -25,6 +25,7 @@ import path from 'node:path'
 
 import { devkitConfig } from '../src/config.mjs'
 import { reconcileProxy } from '../src/proxy.mjs'
+import { proxyHostnames, publicOrigin } from '../src/host-routing.mjs'
 
 /** Marks the files this tool owns, so `ls` can tell them apart and `rm` cannot delete the others. */
 const PREFIX = 'devproxy-'
@@ -46,22 +47,13 @@ function config() {
   return cfg
 }
 
-/**
- * Normalises what the user typed into a hostname the browser will resolve on its own.
- *
- * `.localhost` is appended rather than merely required because typing it every time is noise, but
- * the SUFFIX is not optional: browsers resolve `*.localhost` to loopback with no hosts file and no
- * DNS, and that property is the whole reason this design needs no per-name setup. A name outside it
- * would resolve nowhere and the failure would look like a proxy fault rather than a naming one.
- */
-function normalizeHostname(raw) {
-  const host = String(raw).trim().toLowerCase().replace(/\.$/, '')
-  if (!host) fail('a hostname is required', 'devproxy add <hostname> <port>')
-  const full = host.endsWith('.localhost') ? host : `${host}.localhost`
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.localhost$/.test(full)) {
-    fail(`"${full}" is not a usable hostname`, 'Labels may hold a-z, 0-9 and hyphens, e.g. issue-123.myapp.localhost')
+/** Accepts short names or a full name under any configured domain; filenames stay canonical. */
+function normalizeHostname(raw, cfg) {
+  try {
+    return proxyHostnames(raw, cfg).hostname
+  } catch (error) {
+    fail(error.message, 'Labels may hold a-z, 0-9 and hyphens, e.g. issue-123.myapp')
   }
-  return full
 }
 
 function normalizePort(raw) {
@@ -78,10 +70,6 @@ function routeFile(cfg, hostname) {
 /** Router and service names must be unique across EVERY file, so they carry the hostname too. */
 function routerName(hostname) {
   return `${PREFIX}${hostname.replace(/[^a-z0-9]/g, '-')}`
-}
-
-function proxyOrigin(cfg, hostname) {
-  return `http://${hostname}${cfg.proxyPort === 80 ? '' : `:${cfg.proxyPort}`}`
 }
 
 /**
@@ -105,7 +93,8 @@ function portAnswers(port, timeoutMs = 300) {
 }
 
 function add(cfg, [rawHost, rawPort]) {
-  const hostname = normalizeHostname(rawHost)
+  const hostname = normalizeHostname(rawHost, cfg)
+  const { hostnames } = proxyHostnames(hostname, cfg)
   const port = normalizePort(rawPort)
   mkdirSync(cfg.routesDir, { recursive: true })
 
@@ -119,7 +108,7 @@ function add(cfg, [rawHost, rawPort]) {
 http:
   routers:
     ${name}:
-      rule: "Host(\`${hostname}\`)"
+      rule: "${hostnames.map((host) => `Host(\`${host}\`)`).join(' || ')}"
       service: ${name}
       entryPoints:
         - web
@@ -135,14 +124,14 @@ http:
   const proxy = reconcileProxy(cfg)
   if (!proxy.ok) fail('the route was written, but the shared proxy could not be started', 'Run `devkit doctor` for details.')
 
-  console.log(`  ${proxyOrigin(cfg, hostname)}  ->  http://localhost:${port}`)
+  for (const host of hostnames) console.log(`  ${publicOrigin(host, cfg)}  ->  http://localhost:${port}`)
   return portAnswers(port).then((answers) => {
     if (!answers) console.log(`  (nothing is listening on ${port} yet; the route is live and will work once something is)`)
   })
 }
 
 function remove(cfg, [rawHost]) {
-  const hostname = normalizeHostname(rawHost)
+  const hostname = normalizeHostname(rawHost, cfg)
   const file = routeFile(cfg, hostname)
   if (!existsSync(file)) {
     // Naming the generated file when one exists, rather than a bare "not found": a PrintStream
@@ -150,7 +139,7 @@ function remove(cfg, [rawHost]) {
     const generated = path.join(cfg.routesDir, `${hostname.split('.')[0]}.yml`)
     if (existsSync(generated)) {
       fail(
-        `${hostname} is registered by a running PrintStream checkout, not by devproxy`,
+        `${hostname} is registered by a running Devkit checkout, not by devproxy`,
         `Stop its \`npm run dev\` and the route removes itself (${generated}).`
       )
     }
@@ -170,7 +159,7 @@ async function list(cfg) {
   const rows = []
   for (const file of files) {
     const body = readFileSync(path.join(cfg.routesDir, file), 'utf8')
-    const hostname = body.match(/Host\(`([^`]+)`\)/)?.[1] ?? '(unparsed)'
+    const hostname = [...body.matchAll(/Host\(`([^`]+)`\)/g)].map((match) => match[1]).join(', ') || '(unparsed)'
     const port = Number(body.match(/host\.docker\.internal:(\d+)/)?.[1])
     rows.push({
       hostname,
@@ -203,18 +192,19 @@ switch (command) {
     await list(cfg)
     break
   default:
-    console.log(`Names a running dev server on this machine, so it answers on a *.localhost hostname
+    console.log(`Names a running dev server on this machine, so it answers on a *.${cfg.preferredDomain} hostname
 instead of a port you have to remember. Any project, host process or container.
 
   devproxy add <hostname> <port>   claim a name (permanent until removed)
   devproxy rm <hostname>           release it
   devproxy ls                      what is registered, and whether it answers
 
-  devproxy add myapp 3000          ->  http://myapp.localhost
-  devproxy add issue-123.myapp 3001    ->  http://issue-123.myapp.localhost
+  devproxy add myapp 3000             ->  ${publicOrigin(`myapp.${cfg.preferredDomain}`, cfg)}
+  devproxy add issue-123.myapp 3001    ->  ${publicOrigin(`issue-123.myapp.${cfg.preferredDomain}`, cfg)}
 
-The .localhost suffix is added when you leave it off, and is not optional: browsers resolve
-*.localhost to loopback with no hosts file and no DNS, which is what makes this setup-free.
+Names are registered under ${[cfg.domain, ...cfg.secondaryDomains].join(', ')}.
+The primary suffix is added when omitted; secondary names resolve to the same route.
+Localhost needs no DNS setup. Secondary domains need DNS pointing to this machine.
 
 Routes live in ${cfg.routesDir}
 and are picked up within a moment, with no restart of anything.`)

@@ -105,7 +105,7 @@ test('installed VS Code browser bridge is reused', () => {
   assert.equal(ensureVsCodeBrowserBridge({
     spawnSyncImpl: (command, args) => {
       calls.push([command, args])
-      return { status: 0, stdout: 'ryanewen.devkit-browser@0.2.0\n' }
+      return { status: 0, stdout: 'ryanewen.devkit-browser@0.3.0\n' }
     }
   }), true)
   assert.equal(calls.length, 1)
@@ -121,7 +121,7 @@ test('missing VS Code browser bridge is installed from the bundled VSIX', () => 
   }), true)
   assert.equal(calls.length, 2)
   assert.equal(calls[1][1][0], '--install-extension')
-  assert.match(calls[1][1][1], /devkit-browser-0\.2\.0\.vsix$/)
+  assert.match(calls[1][1][1], /devkit-browser-0\.3\.0\.vsix$/)
 })
 
 test('integrated browser command sends the URL through VS Code Server', () => {
@@ -133,7 +133,7 @@ test('integrated browser command sends the URL through VS Code Server', () => {
   assert.deepEqual(integratedBrowserCommand('http://app.localhost/', {
     env,
     existsSyncImpl: () => true,
-    spawnSyncImpl: () => ({ status: 0, stdout: 'ryanewen.devkit-browser@0.2.0\n' })
+    spawnSyncImpl: () => ({ status: 0, stdout: 'ryanewen.devkit-browser@0.3.0\n' })
   }), {
     command: '/opt/vscode/browser.sh',
     args: ['vscode://ryanewen.devkit-browser/open?windowId=14&url=http%3A%2F%2Fapp.localhost%2F']
@@ -150,7 +150,7 @@ test('integrated browser requires a callback scoped to the originating VS Code w
     existsSyncImpl: () => true,
     spawnSyncImpl: () => {
       bridgeChecked = true
-      return { status: 0, stdout: 'ryanewen.devkit-browser@0.2.0\n' }
+      return { status: 0, stdout: 'ryanewen.devkit-browser@0.3.0\n' }
     }
   }), null)
   assert.equal(bridgeChecked, true)
@@ -220,6 +220,29 @@ test('selected browser target reaches the detached health waiter', () => {
   assert.deepEqual(argumentsPassed.slice(1), [
     '--wait', 'http://app.localhost/', 'http://app.localhost/health', 'native'
   ])
+})
+
+test('remote readiness headers reach the detached waiter while the browser receives its public URL', () => {
+  let argumentsPassed
+  const headers = { Host: 'app.server.home', 'X-Forwarded-Proto': 'http' }
+  scheduleBrowserOpen('http://app.server.home/', 'http://172.24.0.1:18080/health', {
+    target: 'native', headers,
+    spawnImpl: (_command, args) => { argumentsPassed = args; return { unref() {} } }
+  })
+  assert.deepEqual(argumentsPassed.slice(1, 5), [
+    '--wait', 'http://app.server.home/', 'http://172.24.0.1:18080/health', 'native'
+  ])
+  assert.deepEqual(JSON.parse(argumentsPassed[5]), headers)
+})
+
+test('plain SSH sessions print the URL on the client instead of launching a server browser', () => {
+  const logs = []
+  assert.equal(openBrowser('http://app.server.home/', {
+    platform: 'linux', env: { SSH_CONNECTION: 'client server' },
+    log: (message) => logs.push(message),
+    spawnImpl: () => assert.fail('no server-side browser should start')
+  }), 'printed')
+  assert.match(logs[0], /http:\/\/app\.server\.home\//)
 })
 
 test('an explicit VS Code request fails without opening a different browser', () => {

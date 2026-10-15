@@ -16,6 +16,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   symlinkSync,
   unlinkSync,
   writeFileSync
@@ -39,13 +40,13 @@ import {
   checkoutDatabaseVolumes,
   composeUp,
   databaseCompose,
-  infraComposeEnv,
   probeDocker,
   removeVolume
 } from '../src/docker.mjs'
 import { selectDatabaseRuntime } from '../src/database-runtime.mjs'
 import { loadProjectConfig } from '../src/project-config.mjs'
-import { reconcileProxy } from '../src/proxy.mjs'
+import { proxyCompose, reconcileProxy } from '../src/proxy.mjs'
+import { bootstrapSettings, nginxConfig, traefikConfig } from '../src/host-setup.mjs'
 import { runDoctor } from '../src/doctor.mjs'
 import { waitForDatabase } from '../src/preflight.mjs'
 import { prepareCheckout } from '../src/checkout-prepare.mjs'
@@ -77,12 +78,20 @@ function requireConfig() {
  * it always has, so a bootstrap that fails halfway leaves a working machine rather than one that
  * has opted into infrastructure it does not have.
  */
-function bootstrap() {
+function bootstrap(args) {
   if (existsSync('/.dockerenv')) {
     fail(
       'this configures the HOST machine, but it is running inside a container',
       'Run it from a terminal on the machine itself, not from a devcontainer.'
     )
+  }
+
+  let settings
+  try {
+    const marker = devkitMarkerPath()
+    settings = bootstrapSettings(args, existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : {})
+  } catch (error) {
+    fail(`invalid host settings: ${error.message}`)
   }
 
   const docker = probeDocker()
@@ -97,11 +106,16 @@ function bootstrap() {
 
   // Copied out of node_modules because the proxy is machine-wide.
   mkdirSync(infraDir, { recursive: true })
-  for (const filename of ['compose.yml', 'postgres.yml', 'mariadb.yml', 'traefik.yml']) {
-    const source = path.join(packageDir, 'infra', filename)
+  for (const filename of ['compose.yml', 'compose.host.yml', 'postgres.yml', 'mariadb.yml']) {
+    // Older installed clients always read compose.yml; keep that entry point on the chosen network too.
+    const sourceName = filename === 'compose.yml' && settings.proxyNetwork === 'host' ? 'compose.host.yml' : filename
+    const source = path.join(packageDir, 'infra', sourceName)
     const target = path.join(infraDir, filename)
     copyFileSync(source, target)
   }
+  writeFileSync(path.join(infraDir, 'traefik.yml'), traefikConfig(
+    readFileSync(path.join(packageDir, 'infra', 'traefik.yml'), 'utf8'), settings
+  ), 'utf8')
   console.log(`  + managed infra refreshed at ${infraDir}`)
 
   const config = {
@@ -110,14 +124,14 @@ function bootstrap() {
     infraDir,
     routesDir: path.join(configDir, 'routes'),
     baselineDir: path.join(configDir, 'baselines'),
-    proxyPort: 80
+    ...settings
   }
 
   const proxy = reconcileProxy(config)
   if (!proxy.ok) {
     fail(
       'the shared proxy lifecycle could not be reconciled',
-      `Inspect it with: docker compose -p ${config.infraProject} -f ${path.join(infraDir, 'compose.yml')} logs`
+      `Inspect it with: docker compose -p ${config.infraProject} -f ${proxyCompose(config).files[0]} logs`
     )
   }
   console.log(
@@ -130,14 +144,18 @@ function bootstrap() {
   linkOntoPath('devproxy')
 
   const markerPath = devkitMarkerPath()
-  writeFileSync(markerPath, `${JSON.stringify({ enabled: true }, null, 2)}\n`, 'utf8')
+  writeFileSync(markerPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
   console.log(`  + marker written to ${markerPath}`)
 
   console.log('\nDone. devkit is on for this machine.\n')
   console.log('Next:')
   console.log('  devkit snapshot              capture a project\'s current dev data as its baseline')
   console.log('  devkit doctor                show the state of every precondition')
-  console.log('  devproxy add <name> <port>   give any other dev server a *.localhost name')
+  console.log(`  devproxy add <name> <port>   give another dev server a *.${config.preferredDomain} name`)
+  if (config.secondaryDomains.length) {
+    console.log(`\n  Domains: ${[config.domain, ...config.secondaryDomains].join(', ')}; preferred: ${config.preferredDomain}`)
+    console.log('  Restart existing development runners to apply hostnames and application origins.')
+  }
 }
 
 /**
@@ -272,10 +290,10 @@ function liveComposeProjects() {
 }
 
 async function infra(config) {
-  const composeFile = path.join(config.infraDir, 'compose.yml')
-  const proxyStarted = composeUp(config.infraProject, [composeFile], {
-    cwd: config.infraDir,
-    env: infraComposeEnv(config),
+  const proxy = proxyCompose(config)
+  const proxyStarted = composeUp(proxy.project, proxy.files, {
+    cwd: proxy.cwd,
+    env: proxy.env,
     services: ['proxy']
   })
   if (!proxyStarted) fail('the shared proxy could not be started', `docker compose -p ${config.infraProject} logs proxy`)
@@ -316,7 +334,14 @@ const [command, ...args] = process.argv.slice(2)
 
 switch (command) {
   case 'bootstrap':
-    bootstrap()
+    bootstrap(args)
+    break
+  case 'nginx':
+    try {
+      process.stdout.write(nginxConfig(requireConfig(), args))
+    } catch (error) {
+      fail(error.message)
+    }
     break
   case 'doctor':
     process.exit(await runDoctor({ repoRoot }))
@@ -337,8 +362,8 @@ switch (command) {
     await prepare()
     break
   default:
-    console.log(`devkit gives every checkout and worktree on this machine its own *.localhost
-hostname, its own database and its own ports, all derived from its path.
+    console.log(`devkit gives every checkout and worktree on this machine its own hostname (default: *.localhost),
+its own database and its own ports, all derived from its path.
 
   devkit bootstrap    configure the machine proxy and database definitions
   devkit prepare      materialize this checkout's local files and dependencies
@@ -347,6 +372,21 @@ hostname, its own database and its own ports, all derived from its path.
   devkit reset        drop and re-clone this worktree's database (--empty skips the baseline)
   devkit prune        drop databases whose worktree is gone (--yes to actually drop)
   devkit infra        start the proxy + this checkout's database (proxy only outside a repo)
+  devkit nginx        print nginx configuration for the configured domains and public port
+
+Bootstrap routing options (persisted in host.json and preserved on later bootstraps):
+  --secondary-domain <suffix>   add secondary domains (repeat for multiple; replaces the saved list)
+  --preferred-domain <suffix>   choose a configured domain for browser URLs and application origins
+  --domain <suffix>             primary domain (default: localhost)
+  --proxy-port <port>           private Traefik listener (default: 80)
+  --public-port <port>          browser-facing port (default: proxy port, or 443 for HTTPS)
+  --public-scheme <http|https>  browser-facing scheme (default: http)
+  --proxy-network <bridge|host> host networking supports native Linux loopback application ports
+  --proxy-bind-address <ip>     private listener interface in host mode (default: 127.0.0.1)
+
+nginx options: --upstream <http-origin>, --allow <ip-or-cidr> (repeatable),
+  --ssl-certificate <path>, --ssl-certificate-key <path> (required for HTTPS).
+  Access defaults to loopback only; add your client subnet with --allow.
 
 A project opts in with a devkit.config.mjs and by calling preflight() from its dev script.
 Without the marker that bootstrap writes, devkit does nothing at all.`)
