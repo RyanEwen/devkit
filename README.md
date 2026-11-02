@@ -66,7 +66,24 @@ devkit nginx --allow 192.168.2.0/24 --allow 172.24.0.1 > /tmp/devkit.conf
 ```
 
 Use your actual bridge gateway and client subnet. Host networking requires Docker's host networking
-support; bridge mode remains the default. The host listener binds only the selected interface.
+support; bridge mode remains the default. IPv4 loopback (`127.0.0.1`) is always the required listener. IPv6 loopback (`::1`) and the
+selected private interface each run in a separate optional proxy container. A disconnected LAN,
+a stale saved address, or an unavailable IPv6 listener produces a warning and leaves IPv4 local
+routes working. No listener binds a wildcard interface.
+
+Localhost aliases always use HTTP and `proxyPort` directly, even when remote names use HTTPS or
+a different `publicPort`. For the example above, `http://app.localhost:18080` remains available
+while `http://app.server.home` continues to use nginx. Public preferred origins are preserved for
+application URLs and dependency origins; internal readiness checks use `127.0.0.1:proxyPort` with
+the public Host header, so remote DNS and TLS termination are not startup requirements.
+
+After upgrading Devkit, the next startup or `devkit bootstrap` refreshes the managed proxy
+configuration, including machines with an older single-interface host listener. Existing route
+files and route leases remain compatible. Startup repairs the proxy before probing independently
+running dependency projects. `devkit doctor` checks required loopback HTTP and reports optional
+listener failures as warnings. To restore remote access after a network change, update the saved
+private address with `devkit bootstrap --proxy-bind-address <current-private-IP>` and check your
+secondary-domain DNS; this is independent of local startup.
 
 The machine marker (`~/.config/devkit/host.json`, honoring `DEVKIT_CONFIG_DIR` and XDG) stores:
 

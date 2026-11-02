@@ -32,7 +32,7 @@ import { databaseCompose, composeUp, mariadbSql, postgresSql, probeDocker } from
 import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, failedProjectDependencies } from './project-dependencies.mjs'
-import { acquireProxy } from './proxy.mjs'
+import { acquireProxy, ensureProxy } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
 import { checkoutHostnames, checkoutOrigins, publicOrigin, proxyRequest } from './host-routing.mjs'
 import { assertProjectRuntime } from './project-runtime.mjs'
@@ -134,7 +134,12 @@ async function prepareDevState({
         'run `devkit bootstrap` to (re)install it, or `devkit doctor` to see what is wrong'
       )
     }
-    if (checkDependencies) await requireProjectDependencies(config, project)
+    // A stopped or pre-upgrade proxy must be repaired before named dependency health checks.
+    // Their routes remain owned by their independent runners; no new checkout route is leased yet.
+    if (checkDependencies && project.dependencies.length > 0) {
+      if (!ensureProxy(config)) throw new PreflightError('the shared loopback proxy could not be started', 'run `devkit doctor`')
+      await requireProjectDependencies(config, project)
+    }
     waitForDatabase(config, project)
 
     const provisioned = ensureCheckoutDatabase(config, identity, project)
@@ -219,7 +224,12 @@ async function prepareDevState({
 
 /** Verifies declared applications are alive but deliberately never starts or manages them. */
 async function requireProjectDependencies(config, project) {
-  const failures = await failedProjectDependencies(project.dependencies, { config })
+  let failures = await failedProjectDependencies(project.dependencies, { config })
+  // A newly started file provider needs a moment to load existing dependency routes.
+  for (let attempt = 0; failures.length > 0 && attempt < 5; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    failures = await failedProjectDependencies(project.dependencies, { config })
+  }
   if (failures.length === 0) return
 
   const failed = failures.map(({ dependency, url, detail }) => `${dependency.name} at ${url} (${detail})`).join(', ')

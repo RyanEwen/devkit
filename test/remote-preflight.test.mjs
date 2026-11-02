@@ -57,7 +57,7 @@ test('preflight, doctor, and devproxy share preferred remote origins while prese
   writeFileSync(marker, JSON.stringify(remote))
   const state = JSON.parse(run(script))
   assert.equal(state.url, 'http://app.server.home')
-  assert.deepEqual(state.urls, ['http://app.server.home', 'http://app.localhost'])
+  assert.deepEqual(state.urls, ['http://app.server.home', 'http://app.localhost:18080'])
   assert.equal(state.env.CLIENT_ORIGIN, state.url)
   assert.deepEqual(JSON.parse(state.env.DEVKIT_URLS), state.urls)
   assert.equal(state.env.VITE_DEV_ALLOWED_HOSTS, 'app.server.home,app.localhost,localhost,127.0.0.1')
@@ -68,7 +68,10 @@ test('preflight, doctor, and devproxy share preferred remote origins while prese
   assert.ok(calls.some(({ args, port }) => port === '18080' && args.some((arg) => arg.endsWith('compose.host.yml'))))
 
   const cli = fileURLToPath(new URL('../bin/devkit.mjs', import.meta.url))
-  const doctor = run(cli, ['doctor'])
+  const checked = spawnSync(process.execPath, [cli, 'doctor'], options)
+  assert.equal(checked.status, 1)
+  const doctor = checked.stdout
+  assert.match(doctor, /127\.0\.0\.1:18080 not answering/)
   assert.match(doctor, /http:\/\/app\.server\.home/)
   assert.match(doctor, /alternate url\s+http:\/\/app\.localhost/)
   assert.match(run(cli, ['nginx', '--allow', '192.168.2.0/24']), /server_name \*\.localhost \*\.server\.home;/)
@@ -81,4 +84,49 @@ test('preflight, doctor, and devproxy share preferred remote origins while prese
   assert.ok(existsSync(manualRoute))
   run(devproxy, ['rm', 'manual.server.home'])
   assert.equal(existsSync(manualRoute), false)
+})
+
+test('preflight repairs the proxy before dependency probes without requiring remote DNS', async (t) => {
+  const { createServer } = await import('node:http')
+  const { promisify } = await import('node:util')
+  const { execFile } = await import('node:child_process')
+  const root = mkdtempSync(path.join(tmpdir(), 'devkit-dependency-order-'))
+  const repo = path.join(root, 'app'), configDir = path.join(root, 'config'), bin = path.join(root, 'bin')
+  for (const directory of [repo, configDir, bin, path.join(configDir, 'infra')]) mkdirSync(directory, { recursive: true })
+  const trace = path.join(root, 'docker-calls')
+  const requests = []
+  const server = createServer((request, response) => {
+    const calls = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse)
+    assert.ok(calls.some((args) => args.includes('up') && args.at(-1) === 'proxy'), 'proxy repaired before health probe')
+    requests.push({ host: request.headers.host, path: request.url })
+    response.writeHead(204).end()
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); rmSync(root, { recursive: true, force: true }) })
+  execFileSync('git', ['init', '-q', repo])
+  writeFileSync(path.join(repo, 'devkit.config.mjs'), `export default { migrationsTable: null, dependencies: [{ name: 'api', healthPath: '/health' }] }`)
+  writeFileSync(path.join(configDir, 'host.json'), JSON.stringify({
+    enabled: true, proxyNetwork: 'host', proxyBindAddress: '192.0.2.99',
+    secondaryDomains: ['unresolvable.invalid'], preferredDomain: 'unresolvable.invalid',
+    proxyPort: server.address().port, publicScheme: 'https', publicPort: 8443
+  }))
+  writeFileSync(path.join(bin, 'docker'), `#!/usr/bin/env node
+    const { appendFileSync } = require('node:fs')
+    const args = process.argv.slice(2)
+    appendFileSync(process.env.TEST_DOCKER_TRACE, JSON.stringify(args) + '\\n')
+    if (args[0] === 'version') console.log('test')
+    else if (args[0] === 'ps' && args.includes('-q')) console.log('test-container')
+    else if (args[0] === 'exec') console.log('1')
+  `, { mode: 0o755 })
+  const script = path.join(repo, 'dev.mjs')
+  writeFileSync(script, `
+    import { preflight } from ${JSON.stringify(new URL('../src/index.mjs', import.meta.url).href)}
+    const state = await preflight({ repoRoot: process.cwd(), log: null })
+    state.runner.release()
+  `)
+  await promisify(execFile)(process.execPath, [script], {
+    cwd: repo, env: { ...process.env, DEVKIT: '1', DEVKIT_OPEN_BROWSER: '0', DEVKIT_CONFIG_DIR: configDir,
+      PATH: `${bin}:${process.env.PATH}`, TEST_DOCKER_TRACE: trace }
+  })
+  assert.deepEqual(requests, [{ host: 'api.unresolvable.invalid:8443', path: '/health' }])
 })

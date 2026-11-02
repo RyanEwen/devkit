@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import { deriveCheckoutIdentity } from '../src/checkout-identity.mjs'
 import {
   acquireProxy,
+  ensureProxy,
   reconcileProxy,
   releaseProxy,
   removeRoute,
@@ -123,8 +124,8 @@ test('the proxy starts on acquisition and stops only after its final route is re
   }
 
   try {
-    assert.equal(acquireProxy(config, first, 21000, { start }), true)
-    assert.equal(acquireProxy(config, second, 22000, { start }), true)
+    assert.equal(acquireProxy(config, first, 21000, { start, interfaces: {} , remove: () => true, warn: null }), true)
+    assert.equal(acquireProxy(config, second, 22000, { start, interfaces: {} , remove: () => true, warn: null }), true)
     assert.equal(starts.length, 2)
 
     assert.equal(releaseProxy(config, first, { stop }), true)
@@ -150,12 +151,12 @@ test('bootstrap reconciliation removes a legacy proxy unless routes are active',
   }
 
   try {
-    assert.deepEqual(reconcileProxy(config, { start, stop }), { ok: true, running: false })
+    assert.deepEqual(reconcileProxy(config, { start, stop, interfaces: {}, remove: () => true, warn: null }), { ok: true, running: false })
     assert.equal(starts.length, 0)
     assert.equal(stops.length, 1)
 
     writeRoute(config, worktreeIdentity('active'), 21000)
-    assert.deepEqual(reconcileProxy(config, { start, stop }), { ok: true, running: true })
+    assert.deepEqual(reconcileProxy(config, { start, stop, interfaces: {}, remove: () => true, warn: null }), { ok: true, running: true })
     assert.equal(starts.length, 1)
     assert.equal(stops.length, 1)
   } finally {
@@ -219,4 +220,39 @@ test('reconciliation preserves a legacy route whose checkout stack is still runn
   } finally {
     rmSync(config.configDir, { recursive: true, force: true })
   }
+})
+
+test('unavailable LAN and IPv6 listeners do not block IPv4, and stale optional listeners stop', () => {
+  const config = { ...scratchConfig(), proxyNetwork: 'host', proxyBindAddress: '192.0.2.99' }
+  const starts = [], removals = [], warnings = []
+  try {
+    assert.equal(ensureProxy(config, {
+      start: (project, files, options) => { starts.push(options.services); return true },
+      remove: (project, files, options) => { removals.push(options.services); return true },
+      interfaces: {}, warn: (message) => warnings.push(message)
+    }), true)
+    assert.deepEqual(starts, [['proxy']])
+    assert.deepEqual(removals, [['proxy-ipv6'], ['proxy-lan']])
+    assert.equal(warnings.length, 2)
+    assert.match(readFileSync(path.join(config.infraDir, 'traefik.yml'), 'utf8'), /127\.0\.0\.1:80/)
+    assert.match(readFileSync(path.join(config.infraDir, 'traefik.lan.yml'), 'utf8'), /192\.0\.2\.99:80/)
+  } finally { rmSync(config.configDir, { recursive: true, force: true }) }
+})
+
+test('optional bind failures are warnings while required bind failure stops acquisition', () => {
+  const config = { ...scratchConfig(), proxyNetwork: 'host', proxyBindAddress: '192.0.2.99' }
+  const identity = worktreeIdentity('bind-failure')
+  const services = [], warnings = []
+  const interfaces = { loopback: [{ address: '::1' }], lan: [{ address: '192.0.2.99' }] }
+  try {
+    assert.equal(acquireProxy(config, identity, 21000, {
+      interfaces, warn: (message) => warnings.push(message),
+      start: (project, files, options) => { services.push(options.services[0]); return options.services[0] === 'proxy' }
+    }), true)
+    assert.deepEqual(services, ['proxy', 'proxy-ipv6', 'proxy-lan'])
+    assert.equal(warnings.length, 2)
+    assert.ok(existsSync(routeFilePath(config, identity)))
+    assert.equal(acquireProxy(config, identity, 21000, { interfaces, start: () => false }), false)
+    assert.equal(existsSync(routeFilePath(config, identity)), false)
+  } finally { rmSync(config.configDir, { recursive: true, force: true }) }
 })

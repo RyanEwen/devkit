@@ -35,7 +35,7 @@ test('secondary domains add aliases without changing checkout resources or the d
   assert.deepEqual(preferred.secondaryHostnames, ['app.localhost'])
   for (const key of ['slug', 'composeProject', 'databaseName']) assert.equal(preferred[key], original[key])
   assert.deepEqual(checkoutPorts(preferred), checkoutPorts(original))
-  assert.deepEqual(checkoutOrigins(preferred, remote), ['http://app.server.home', 'http://app.localhost'])
+  assert.deepEqual(checkoutOrigins(preferred, remote), ['http://app.server.home', 'http://app.localhost:18080'])
 })
 
 test('worktree aliases preserve the nested project naming', () => {
@@ -100,21 +100,23 @@ test('remote dependency origins are public but readiness probes use the private 
   })
   assert.equal(results[0].url, 'http://api.server.home/health?ready=1')
   assert.equal(results[0].ok, true)
-  assert.equal(request.url, 'http://172.24.0.1:18080/health?ready=1')
+  assert.equal(request.url, 'http://127.0.0.1:18080/health?ready=1')
   assert.equal(request.options.headers.Host, 'api.server.home')
   assert.deepEqual(proxyRequest('https://app.server.home/health', {
     ...remote, publicScheme: 'https', publicPort: 443
   }), {
-    url: 'http://172.24.0.1:18080/health', headers: { Host: 'app.server.home', 'X-Forwarded-Proto': 'https' }
+    url: 'http://127.0.0.1:18080/health', headers: { Host: 'app.server.home', 'X-Forwarded-Proto': 'https' }
   })
 })
 
-test('host mode is explicitly selected and the static entry point binds the private interface', () => {
+test('host mode keeps required loopback separate from optional interface listeners', () => {
   const config = { ...remote, infraDir: '/config/infra', routesDir: '/config/routes', infraProject: 'devkit-infra' }
   assert.deepEqual(proxyCompose(config).files, ['/config/infra/compose.host.yml'])
   assert.deepEqual(proxyCompose({ ...config, proxyNetwork: 'bridge' }).files, ['/config/infra/compose.yml'])
   const template = readFileSync(new URL('../infra/traefik.yml', import.meta.url), 'utf8')
-  assert.match(traefikConfig(template, remote), /address: "172\.24\.0\.1:18080"/)
+  assert.match(traefikConfig(template, remote), /address: "127\.0\.0\.1:18080"/)
+  assert.match(traefikConfig(template, remote, 'lan'), /address: "172\.24\.0\.1:18080"/)
+  assert.match(traefikConfig(template, remote, 'ipv6'), /address: "\[::1\]:18080"/)
   assert.match(traefikConfig(template, { proxyPort: 8080 }), /address: ":80"/)
 })
 
@@ -138,4 +140,16 @@ test('nginx HTTPS generation requires certificate paths and preserves the public
   const snippet = nginxConfig(https, ['--ssl-certificate', '/certs/dev.crt', '--ssl-certificate-key', '/certs/dev.key'])
   assert.match(snippet, /listen 8443 ssl;/)
   assert.match(snippet, /ssl_certificate "\/certs\/dev\.crt";/)
+})
+
+test('localhost always uses its HTTP loopback port while remote TLS/public ports remain public', () => {
+  const settings = { ...remote, publicScheme: 'https', publicPort: 8443 }
+  assert.equal(publicOrigin('app.localhost', settings), 'http://app.localhost:18080')
+  assert.equal(publicOrigin('app.server.home', settings), 'https://app.server.home:8443')
+  assert.deepEqual(proxyRequest('http://app.localhost:18080/ready?q=1', settings), {
+    url: 'http://127.0.0.1:18080/ready?q=1', headers: { Host: 'app.localhost:18080', 'X-Forwarded-Proto': 'http' }
+  })
+  assert.deepEqual(proxyRequest('https://app.server.home:8443/ready?q=1', settings), {
+    url: 'http://127.0.0.1:18080/ready?q=1', headers: { Host: 'app.server.home:8443', 'X-Forwarded-Proto': 'https' }
+  })
 })

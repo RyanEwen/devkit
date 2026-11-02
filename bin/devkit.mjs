@@ -46,7 +46,7 @@ import {
 import { selectDatabaseRuntime } from '../src/database-runtime.mjs'
 import { loadProjectConfig } from '../src/project-config.mjs'
 import { proxyCompose, reconcileProxy } from '../src/proxy.mjs'
-import { bootstrapSettings, nginxConfig, traefikConfig } from '../src/host-setup.mjs'
+import { bootstrapSettings, nginxConfig } from '../src/host-setup.mjs'
 import { runDoctor } from '../src/doctor.mjs'
 import { waitForDatabase } from '../src/preflight.mjs'
 import { prepareCheckout } from '../src/checkout-prepare.mjs'
@@ -108,16 +108,9 @@ function bootstrap(args) {
 
   // Copied out of node_modules because the proxy is machine-wide.
   mkdirSync(infraDir, { recursive: true })
-  for (const filename of ['compose.yml', 'compose.host.yml', 'postgres.yml', 'mariadb.yml']) {
-    // Older installed clients always read compose.yml; keep that entry point on the chosen network too.
-    const sourceName = filename === 'compose.yml' && settings.proxyNetwork === 'host' ? 'compose.host.yml' : filename
-    const source = path.join(packageDir, 'infra', sourceName)
-    const target = path.join(infraDir, filename)
-    copyFileSync(source, target)
+  for (const filename of ['postgres.yml', 'mariadb.yml']) {
+    copyFileSync(path.join(packageDir, 'infra', filename), path.join(infraDir, filename))
   }
-  writeFileSync(path.join(infraDir, 'traefik.yml'), traefikConfig(
-    readFileSync(path.join(packageDir, 'infra', 'traefik.yml'), 'utf8'), settings
-  ), 'utf8')
   console.log(`  + managed infra refreshed at ${infraDir}`)
 
   const config = {

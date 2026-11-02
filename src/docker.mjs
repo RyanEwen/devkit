@@ -56,12 +56,20 @@ export function composeContainers(project) {
  * Brings the shared infra stack up. Idempotent: Compose no-ops when the containers already match,
  * which is why the preflight can call this on every `npm run dev` without paying for it.
  */
-export function composeUp(project, files, { cwd, services = [], env } = {}) {
+export function composeUp(project, files, { cwd, services = [], env, wait = false, removeOrphans = false } = {}) {
   const args = ['compose', '-p', project]
   for (const file of files) args.push('-f', file)
-  args.push('up', '-d', ...services)
+  args.push('up', '-d', ...(wait ? ['--wait', '--wait-timeout', '10'] : []), ...(removeOrphans ? ['--remove-orphans'] : []), ...services)
   const result = run('docker', args, { cwd, stdio: 'inherit', env: env ? { ...process.env, ...env } : process.env })
   return result.status === 0
+}
+
+/** Stops only an optional proxy listener, preserving other services and volumes. */
+export function composeRemoveServices(project, files, { cwd, env, services = [] } = {}) {
+  const args = ['compose', '-p', project]
+  for (const file of files) args.push('-f', file)
+  args.push('rm', '--stop', '--force', ...services)
+  return run('docker', args, { cwd, stdio: 'inherit', env: { ...process.env, ...env } }).status === 0
 }
 
 /** Removes a Compose project and its containers while preserving named volumes. */
@@ -77,7 +85,8 @@ export function composeDown(project, files, { cwd, env } = {}) {
 export function infraComposeEnv(config) {
   return {
     DEVKIT_ROUTES_DIR: config.routesDir,
-    DEVKIT_PROXY_PORT: String(config.proxyPort)
+    DEVKIT_PROXY_PORT: String(config.proxyPort ?? 80),
+    DEVKIT_PROXY_BIND_ADDRESS: config.proxyBindAddress ?? '127.0.0.1'
   }
 }
 

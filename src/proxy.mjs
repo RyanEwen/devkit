@@ -18,17 +18,21 @@
  */
 import {
   mkdirSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
 import path from 'node:path'
+import { networkInterfaces } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
-import { composeContainers, composeDown, composeUp, infraComposeEnv } from './docker.mjs'
+import { composeContainers, composeDown, composeUp, composeRemoveServices, infraComposeEnv } from './docker.mjs'
 
 import { processIsAlive, withRuntimeLock } from './runtime-lock.mjs'
-import { checkoutHostnames } from './host-routing.mjs'
+import { traefikConfig } from './host-setup.mjs'
+import { checkoutHostnames, normalizeHostRouting } from './host-routing.mjs'
 
 /** One file per checkout, named from the slug so a stale file is obvious and safe to delete. */
 export function routeFilePath(config, identity) {
@@ -89,6 +93,68 @@ export function proxyCompose(config) {
   }
 }
 
+/** Refresh managed definitions on upgrade, even when bootstrap predates this client. */
+export function installProxyDefinitions(config) {
+  const sourceDir = fileURLToPath(new URL('../infra/', import.meta.url))
+  mkdirSync(config.infraDir, { recursive: true })
+  const writeChanged = (name, contents) => {
+    const target = path.join(config.infraDir, name)
+    if (!existsSync(target) || readFileSync(target, 'utf8') !== contents) writeFileSync(target, contents, 'utf8')
+  }
+  for (const name of ['compose.yml', 'compose.host.yml']) {
+    // Old clients select compose.yml; keep that entry on this machine's chosen network.
+    const source = name === 'compose.yml' && config.proxyNetwork === 'host' ? 'compose.host.yml' : name
+    writeChanged(name, readFileSync(path.join(sourceDir, source), 'utf8'))
+  }
+  const template = readFileSync(path.join(sourceDir, 'traefik.yml'), 'utf8')
+  for (const [name, listener] of [['traefik.yml', 'local'], ['traefik.ipv6.yml', 'ipv6'], ['traefik.lan.yml', 'lan']]) {
+    writeChanged(name, traefikConfig(template, config, listener))
+  }
+}
+
+function localInterfaces() {
+  try { return networkInterfaces() } catch { return {} }
+}
+
+export function optionalProxyListeners(config, interfaces = localInterfaces()) {
+  config = { ...config, ...normalizeHostRouting(config) }
+  const addresses = Object.values(interfaces).flat().map(({ address }) => address)
+  const listeners = [{ service: 'proxy-ipv6', available: addresses.includes('::1'), address: '::1' }]
+  if (config.proxyNetwork === 'host' && !['127.0.0.1', '::1'].includes(config.proxyBindAddress)) {
+    listeners.push({ service: 'proxy-lan', available: addresses.includes(config.proxyBindAddress), address: config.proxyBindAddress })
+  }
+  if (config.proxyNetwork === 'host' && listeners.length === 1) listeners.push({ service: 'proxy-lan', available: false, enabled: false, address: config.proxyBindAddress })
+  return listeners
+}
+
+/** Required IPv4 loopback first; each optional listener is a separate failure domain. */
+function startProxy(config, {
+  start = composeUp, remove = composeRemoveServices, interfaces = localInterfaces(), warn = console.warn
+} = {}) {
+  config = { ...config, ...normalizeHostRouting(config) }
+  installProxyDefinitions(config)
+  const compose = proxyCompose(config)
+  const options = { cwd: compose.cwd, env: compose.env, wait: true, removeOrphans: true }
+  if (!start(compose.project, compose.files, { ...options, services: ['proxy'] })) return false
+  for (const listener of optionalProxyListeners(config, interfaces)) {
+    if (!listener.available) {
+      if (!remove(compose.project, compose.files, { ...options, services: [listener.service] })) {
+        warn?.(`[devkit] could not remove optional ${listener.service}; inspect it with devkit doctor`)
+      }
+      if (listener.enabled === false) continue
+      warn?.(`[devkit] optional ${listener.service} unavailable at ${listener.address}; IPv4 localhost remains available`)
+    } else if (!start(compose.project, compose.files, { ...options, services: [listener.service] })) {
+      warn?.(`[devkit] optional ${listener.service} failed at ${listener.address}; IPv4 localhost remains available`)
+    }
+  }
+  return true
+}
+
+/** Repair existing dependency routes before probing them, without registering a new checkout. */
+export function ensureProxy(config, options = {}) {
+  return withRuntimeLock(config, 'proxy', () => startProxy(config, options))
+}
+
 /** Derives the Compose project used by an unleased route from its generated hostname. */
 function legacyComposeProject(contents) {
   const hostname = contents.match(/Host\(`([^`]+)\.localhost`\)/)?.[1]
@@ -139,15 +205,10 @@ function registeredRoutes(config, { containers = composeContainers } = {}) {
  * Writing the route first ensures a simultaneous last-user shutdown sees the new consumer. If
  * Compose fails, the route is rolled back so a failed start cannot keep Docker Desktop awake.
  */
-export function acquireProxy(config, identity, port, { start = composeUp } = {}) {
+export function acquireProxy(config, identity, port, options = {}) {
   return withRuntimeLock(config, 'proxy', () => {
     writeRoute(config, identity, port)
-    const compose = proxyCompose(config)
-    const started = start(compose.project, compose.files, {
-      cwd: compose.cwd,
-      env: compose.env,
-      services: ['proxy']
-    })
+    const started = startProxy(config, options)
     if (!started) removeRoute(config, identity)
     return started
   })
@@ -180,19 +241,18 @@ export function releaseProxy(config, identity, { stop = composeDown, containers 
  */
 export function reconcileProxy(
   config,
-  { start = composeUp, stop = composeDown, containers = composeContainers } = {}
+  { stop = composeDown, containers = composeContainers, ...options } = {}
 ) {
   return withRuntimeLock(config, 'proxy', () => {
     const compose = proxyCompose(config)
+    installProxyDefinitions(config)
     const running = registeredRoutes(config, { containers }).length > 0
-    const action = running ? start : stop
-    const options = {
+    const stopOptions = {
       cwd: compose.cwd,
       env: compose.env,
-      ...(running ? { services: ['proxy'] } : {})
     }
     return {
-      ok: action(compose.project, compose.files, options),
+      ok: running ? startProxy(config, options) : stop(compose.project, compose.files, stopOptions),
       running
     }
   })

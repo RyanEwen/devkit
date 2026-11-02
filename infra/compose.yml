@@ -22,13 +22,31 @@ services:
     # The project lifecycle starts this on first use and removes it after the final route closes.
     # A restart policy would resurrect an unused proxy whenever Docker Desktop starts.
     restart: "no"
+    labels:
+      devkit.routing-version: "2"
+      devkit.proxy-port: "${DEVKIT_PROXY_PORT:-80}"
     ports:
       - "127.0.0.1:${DEVKIT_PROXY_PORT:-80}:80"
-      - "[::1]:${DEVKIT_PROXY_PORT:-80}:80"
+
     volumes:
       - ${DEVKIT_ROUTES_DIR:?routes directory must be set}:/routes:ro
       - ./traefik.yml:/etc/traefik/traefik.yml:ro
     # Lets a container-side route reach a dev server running on the host. Docker Desktop provides
     # this name natively; the explicit host-gateway mapping is what makes it resolve on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Separate from IPv4 so hosts without IPv6 still have a working local proxy.
+  proxy-ipv6:
+    image: traefik:v3
+    restart: "no"
+    labels:
+      devkit.routing-version: "2"
+      devkit.proxy-port: "${DEVKIT_PROXY_PORT:-80}"
+    ports:
+      - "[::1]:${DEVKIT_PROXY_PORT:-80}:80"
+    volumes:
+      - ${DEVKIT_ROUTES_DIR:?routes directory must be set}:/routes:ro
+      - ./traefik.ipv6.yml:/etc/traefik/traefik.yml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

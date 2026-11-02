@@ -1,12 +1,25 @@
-# Native Linux option: reach checkout application ports published only to host loopback.
-# The entry point in traefik.yml binds the explicitly configured private interface and port.
+# Required IPv4 loopback and optional IPv6/LAN listeners run independently.
+# A missing interface or occupied optional port must never stop local development.
 services:
   proxy:
     image: traefik:v3
     restart: "no"
+    labels:
+      devkit.routing-version: "2"
+      devkit.proxy-port: "${DEVKIT_PROXY_PORT:-80}"
     network_mode: host
     volumes:
       - ${DEVKIT_ROUTES_DIR:?routes directory must be set}:/routes:ro
       - ./traefik.yml:/etc/traefik/traefik.yml:ro
     extra_hosts:
       - "host.docker.internal:127.0.0.1"
+  proxy-ipv6:
+    extends: proxy
+    volumes:
+      - ./traefik.ipv6.yml:/etc/traefik/traefik.yml:ro
+  proxy-lan:
+    extends: proxy
+    labels:
+      devkit.bind-address: "${DEVKIT_PROXY_BIND_ADDRESS:-127.0.0.1}"
+    volumes:
+      - ./traefik.lan.yml:/etc/traefik/traefik.yml:ro

@@ -13,7 +13,8 @@ test('infra compose receives only proxy settings', () => {
     mariadb: { port: 3307, user: 'root', password: 'root', volume: 'custom-maria' }
   })
 
-  assert.deepEqual(env, { DEVKIT_ROUTES_DIR: '/config/routes', DEVKIT_PROXY_PORT: '80' })
+  assert.deepEqual(env, { DEVKIT_ROUTES_DIR: '/config/routes', DEVKIT_PROXY_PORT: '80',
+    DEVKIT_PROXY_BIND_ADDRESS: '127.0.0.1' })
 })
 
 test('a checkout database gets an exact image and only its engine credentials', () => {

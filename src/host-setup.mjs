@@ -39,10 +39,12 @@ export function bootstrapSettings(args, previous = {}) {
   return { ...settings, ...normalizeHostRouting(settings) }
 }
 
-export function traefikConfig(template, settings) {
+export function traefikConfig(template, settings, listener = 'local') {
   const config = normalizeHostRouting(settings)
   const host = config.proxyBindAddress.includes(':') ? `[${config.proxyBindAddress}]` : config.proxyBindAddress
-  const address = config.proxyNetwork === 'host' ? `${host}:${config.proxyPort}` : ':80'
+  const address = listener === 'lan' ? `${host}:${config.proxyPort}`
+    : config.proxyNetwork !== 'host' ? ':80'
+    : `${listener === 'ipv6' ? '[::1]' : '127.0.0.1'}:${config.proxyPort}`
   return template.replace('address: ":80"', `address: ${JSON.stringify(address)}`)
 }
 

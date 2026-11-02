@@ -139,7 +139,7 @@ test('background runner survives parent exit, rejects duplicates without Docker 
   const runner = JSON.parse(readFileSync(runnerFilePath(config, identity)))
   assert.doesNotThrow(() => process.kill(runner.pid, 0))
   const deadline = Date.now() + 5000
-  while (!readFileSync(trace, 'utf8').includes('--remove-orphans')) {
+  while (!readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse).some((args) => args.includes('up') && !args.includes('-d'))) {
     assert.ok(Date.now() < deadline, 'fixture Compose runner did not start')
     await new Promise((resolve) => setTimeout(resolve, 25))
   }

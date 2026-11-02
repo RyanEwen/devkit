@@ -26,7 +26,8 @@ import { composeContainers, mariadbSql, postgresSql, probeDocker } from './docke
 import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, probeProjectDependencies } from './project-dependencies.mjs'
-import { routeFilePath } from './proxy.mjs'
+import { routeFilePath, optionalProxyListeners } from './proxy.mjs'
+import { fetchHealth } from './health-request.mjs'
 import { checkoutOrigins, publicOrigin } from './host-routing.mjs'
 
 const OK = '+'
@@ -72,7 +73,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   report(OK, 'config', project.configPath ?? 'no devkit.config.mjs, using defaults')
   report(OK, 'url', `${publicOrigin(identity.hostname, config)}   (server-local: http://localhost:${ports.web})`)
   for (const url of checkoutOrigins(identity, config).slice(1)) report(OK, 'alternate url', url)
-  report(OK, 'proxy listener', `${config.proxyBindAddress}:${config.proxyPort} (${config.proxyNetwork})`)
+  report(OK, 'local listener', `127.0.0.1:${config.proxyPort} (${config.proxyNetwork})`)
 
   const docker = probeDocker()
   if (!docker.ok) {
@@ -86,7 +87,21 @@ export async function runDoctor({ repoRoot, log = console.log }) {
   const databaseService = config.databaseRuntime.service
   const databaseRunning = composeContainers(config.databaseRuntime.project)
   if (proxyRunning.includes('proxy')) report(OK, 'proxy', `running in project ${config.infraProject}`)
-  else report(BAD, 'proxy', 'not running', 'devkit infra')
+  else report(BAD, 'proxy', 'not running', 'the next dev start repairs it')
+  for (const listener of [{ service: 'proxy', address: '127.0.0.1', available: true }, ...optionalProxyListeners(config).filter((listener) => listener.enabled !== false)]) {
+    const required = listener.service === 'proxy'
+    const address = listener.address.includes(':') ? `[${listener.address}]` : listener.address
+    let answering = false
+    if (listener.available && proxyRunning.includes(listener.service)) {
+      try {
+        await fetchHealth(`http://${address}:${config.proxyPort}/`, { signal: AbortSignal.timeout(1_000) })
+        answering = true // A Traefik 404 still proves this listener accepts HTTP.
+      } catch { /* Report below, without making optional listeners fatal. */ }
+    }
+    report(answering ? OK : required ? BAD : WARN, listener.service,
+      `${address}:${config.proxyPort} ${answering ? 'accepting HTTP' : listener.available ? 'not answering' : 'interface unavailable'}`,
+      answering ? null : required ? 'the next dev start repairs the loopback proxy' : 'optional listener; local development uses IPv4 loopback')
+  }
 
   for (const result of await probeProjectDependencies(project.dependencies, { config })) {
     report(

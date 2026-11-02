@@ -77,6 +77,11 @@ export function publicOrigin(hostname, settings = {}) {
     typeof settings === 'number' ? { proxyPort: settings } : settings
   )
   const defaultPort = publicScheme === 'https' ? 443 : 80
+  // Local aliases bypass remote TLS termination and public-port remapping.
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    const { proxyPort } = normalizeHostRouting(typeof settings === 'number' ? { proxyPort: settings } : settings)
+    return `http://${hostname}${proxyPort === 80 ? '' : `:${proxyPort}`}`
+  }
   return `${publicScheme}://${hostname}${publicPort === defaultPort ? '' : `:${publicPort}`}`
 }
 
@@ -84,9 +89,9 @@ export function publicOrigin(hostname, settings = {}) {
 export function proxyRequest(publicUrl, settings) {
   const config = normalizeHostRouting(settings)
   const target = new URL(publicUrl)
-  const host = config.proxyBindAddress.includes(':') ? `[${config.proxyBindAddress}]` : config.proxyBindAddress
+  const host = '127.0.0.1'
   return {
     url: `http://${host}:${config.proxyPort}${target.pathname}${target.search}`,
-    headers: { Host: target.host, 'X-Forwarded-Proto': config.publicScheme }
+    headers: { Host: target.host, 'X-Forwarded-Proto': target.protocol.slice(0, -1) }
   }
 }
