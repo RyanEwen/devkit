@@ -73,11 +73,24 @@ export function composeRemoveServices(project, files, { cwd, env, services = [] 
 }
 
 /** Removes a Compose project and its containers while preserving named volumes. */
-export function composeDown(project, files, { cwd, env } = {}) {
+export function composeDown(project, files, { cwd, env, runCommand = run } = {}) {
+  // Compose emits a warning when `down` targets a project that has never created any
+  // resources. Check containers in every state and project networks first so stopped
+  // containers and leftover networks still get cleaned up. If either probe fails, run
+  // `down` anyway; its result remains the source of truth for real Docker failures.
+  const containerProbe = runCommand('docker', [
+    'ps', '-a', '-q', '--filter', `label=com.docker.compose.project=${project}`
+  ], { cwd, env: env ? { ...process.env, ...env } : process.env })
+  const networkProbe = runCommand('docker', [
+    'network', 'ls', '-q', '--filter', `label=com.docker.compose.project=${project}`
+  ], { cwd, env: env ? { ...process.env, ...env } : process.env })
+  if (containerProbe.status === 0 && networkProbe.status === 0 &&
+      !containerProbe.stdout.trim() && !networkProbe.stdout.trim()) return true
+
   const args = ['compose', '-p', project]
   for (const file of files) args.push('-f', file)
   args.push('down', '--remove-orphans')
-  const result = run('docker', args, { cwd, stdio: 'inherit', env: env ? { ...process.env, ...env } : process.env })
+  const result = runCommand('docker', args, { cwd, stdio: 'inherit', env: env ? { ...process.env, ...env } : process.env })
   return result.status === 0
 }
 

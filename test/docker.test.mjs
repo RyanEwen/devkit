@@ -2,7 +2,73 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { databaseCompose, infraComposeEnv } from '../src/docker.mjs'
+import { composeDown, databaseCompose, infraComposeEnv } from '../src/docker.mjs'
+
+test('empty Compose teardown skips down, but probes containers and networks', () => {
+  const calls = []
+  const result = composeDown('devkit-infra', ['/infra/compose.yml'], {
+    runCommand: (command, args) => {
+      calls.push(args)
+      return { status: 0, stdout: '' }
+    }
+  })
+
+  assert.equal(result, true)
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[0].slice(0, 3), ['ps', '-a', '-q'])
+  assert.deepEqual(calls[1].slice(0, 3), ['network', 'ls', '-q'])
+})
+
+test('Compose teardown cleans stopped containers and networks with the configured arguments and environment', () => {
+  for (const resource of ['container', 'network']) {
+    const calls = []
+    const env = { DEVKIT_ROUTES_DIR: '/config/routes' }
+    const result = composeDown('devkit-infra', ['/infra/compose.yml'], {
+      cwd: '/config/infra', env,
+      runCommand: (command, args, options) => {
+        calls.push({ args, options })
+        if (args[0] === 'compose') return { status: 0, stdout: '', stderr: '' }
+        const ownsResource = (args[0] === 'ps' && resource === 'container') ||
+          (args[0] === 'network' && resource === 'network')
+        return { status: 0, stdout: ownsResource ? 'resource-id\n' : '' }
+      }
+    })
+
+    assert.equal(result, true)
+    assert.equal(calls.length, 3)
+    assert.deepEqual(calls[2].args, ['compose', '-p', 'devkit-infra', '-f', '/infra/compose.yml', 'down', '--remove-orphans'])
+    assert.equal(calls[2].options.cwd, '/config/infra')
+    assert.deepEqual(calls[2].options.env, { ...process.env, ...env })
+  }
+})
+
+test('Compose teardown still cleans up when either resource probe fails', () => {
+  for (const failedProbe of ['ps', 'network']) {
+    const calls = []
+    const result = composeDown('devkit-infra', ['/infra/compose.yml'], {
+      runCommand: (_command, args) => {
+        calls.push(args)
+        if (args[0] === 'compose') return { status: 0, stdout: '', stderr: '' }
+        return args[0] === failedProbe
+          ? { status: 1, stdout: '', stderr: 'probe failed' }
+          : { status: 0, stdout: '' }
+      }
+    })
+    assert.equal(result, true)
+    assert.equal(calls.at(-1)[0], 'compose')
+  }
+})
+
+test('Compose teardown retains cleanup failures when resources exist', () => {
+  const result = composeDown('devkit-infra', ['/infra/compose.yml'], {
+    runCommand: (_command, args) => args[0] === 'ps'
+      ? { status: 0, stdout: 'stopped-container\n' }
+      : args[0] === 'network'
+        ? { status: 0, stdout: '' }
+        : { status: 1, stdout: '', stderr: 'daemon unavailable' }
+  })
+  assert.equal(result, false)
+})
 
 test('infra compose receives only proxy settings', () => {
   const env = infraComposeEnv({
