@@ -52,6 +52,8 @@ import { waitForDatabase } from '../src/preflight.mjs'
 import { prepareCheckout } from '../src/checkout-prepare.mjs'
 import { enterProjectRuntime, runProjectCommand } from '../src/project-runtime.mjs'
 import { cleanupCheckout } from '../src/checkout-cleanup.mjs'
+import { useDependencyTargets } from '../src/dependency-targets.mjs'
+import { probeProjectDependencies } from '../src/project-dependencies.mjs'
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = process.cwd()
@@ -310,6 +312,18 @@ async function infra(config) {
   console.log(`  + proxy and ${project.database.engine}:${config.databaseRuntime.version} database running`)
 }
 
+/** `devkit use`: show or choose which checkout of each declared dependency this checkout uses. */
+async function use(config, args) {
+  const identity = checkoutIdentity(repoRoot, config)
+  if (!identity) fail(`${repoRoot} is not a git checkout`)
+  try {
+    const project = await loadProjectConfig(repoRoot)
+    await useDependencyTargets({ config, identity, project, args, probe: probeProjectDependencies })
+  } catch (error) {
+    fail(error.message)
+  }
+}
+
 /** Prepares checkout-local files and dependencies without starting development infrastructure. */
 async function prepare() {
   let result
@@ -379,6 +393,9 @@ switch (command) {
   case 'prepare':
     await prepare()
     break
+  case 'use':
+    await use(requireConfig(), args)
+    break
   default:
     console.log(`devkit gives every checkout and worktree on this machine its own hostname (default: *.localhost),
 its own database and its own ports, all derived from its path.
@@ -392,6 +409,8 @@ its own database and its own ports, all derived from its path.
   devkit prune        drop databases whose worktree is gone (--yes to actually drop)
   devkit cleanup      preview private worktree resource removal (--yes removes; --paseo checks active references)
   devkit infra        start the proxy + this checkout's database (proxy only outside a repo)
+  devkit use          show or choose which checkout of each dependency this checkout uses
+                      (devkit use <dependency> <worktree>, or <dependency> --primary to revert)
   devkit nginx        print nginx configuration for the configured domains and public port
 
 Bootstrap routing options (persisted in host.json and preserved on later bootstraps):

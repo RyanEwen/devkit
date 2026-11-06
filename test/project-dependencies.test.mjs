@@ -17,6 +17,29 @@ test('dependency URLs use the shared Traefik port and configured health path', (
   })
 })
 
+test('a worktree target selects that worktree of the dependency for URLs and origins', () => {
+  const dependency = { name: 'platform', healthPath: '/integrations/health/live' }
+  assert.equal(dependencyUrl(dependency, {}, 'pickup-limits'), 'http://pickup-limits.platform.localhost/integrations/health/live')
+  assert.deepEqual(
+    dependencyOrigins([dependency, { name: 'public-api' }], 8080, { platform: 'pickup-limits' }),
+    { platform: 'http://pickup-limits.platform.localhost:8080', 'public-api': 'http://public-api.localhost:8080' }
+  )
+})
+
+test('probes check the targeted worktree and report which one they checked', async () => {
+  const requested = []
+  const results = await probeProjectDependencies(
+    [{ name: 'platform', healthPath: '/health' }, { name: 'public-api', healthPath: '/health' }],
+    { targets: { platform: 'pickup-limits' }, fetchImpl: async (url) => { requested.push(url); return { ok: true, status: 200 } } }
+  )
+  assert.deepEqual(requested, ['http://pickup-limits.platform.localhost/health', 'http://public-api.localhost/health'])
+  assert.deepEqual(results.map(({ worktree }) => worktree), ['pickup-limits', undefined])
+})
+
+test('dependency names that match object built-ins resolve normally', () => {
+  assert.deepEqual(dependencyOrigins([{ name: 'constructor' }], {}, {}), { constructor: 'http://constructor.localhost' })
+})
+
 test('a successful dependency does not fail preflight', async () => {
   const requested = []
   const failures = await failedProjectDependencies(

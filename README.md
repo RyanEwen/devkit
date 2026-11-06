@@ -260,6 +260,34 @@ original tree. Devkit adds the short-lived backup pattern to Git's local exclude
 so projects do not need to commit a tool-specific ignore rule. This lets a worktree start with shared
 dependencies while still guaranteeing that source-mounted containers receive a real local directory.
 
+### Using a dependency's worktree
+
+A declared dependency normally resolves to its project's primary checkout, such as
+`platform.localhost`. To test two branches together, point one checkout's dependency at a linked
+worktree of the other project:
+
+```bash
+devkit use platform bulk-email-pickup-limits   # use bulk-email-pickup-limits.platform.localhost
+devkit use                                     # list each dependency, its checkout, and its health
+devkit use platform --primary                  # go back to platform.localhost
+```
+
+The worktree name is the first part of that worktree's hostname, as shown by its `devkit doctor`.
+Git can name a worktree differently from its directory, so `devkit use` only accepts a worktree
+whose dev server is running, lists the running ones when the name does not match, and shows the
+directory and branch it selected. Startup repeats that line, so a surprising branch is visible.
+The choice applies only to the checkout where you ran the command, and takes effect on its next dev
+start: the startup health check, `devkit doctor`, and the `dependencyOrigins` passed to `env()`
+all use the selected worktree. A container that resolves dependency hostnames through
+`extra_hosts` should derive the hostname from `dependencyOrigins` rather than hard-coding it.
+
+The choice is stored under `~/.config/devkit/dependency-targets`, never in either repository, with
+the path of the checkout that made it. If that checkout moves, or a new worktree reuses a removed
+one's name, startup stops and asks you to choose again with `devkit use`, rather than guessing.
+`devkit cleanup --yes` removes it with the worktree's other private state. A damaged file stops
+startup and makes `devkit doctor` report the dependency as unknown, rather than silently falling
+back to the primary checkout; stopping a checkout still works.
+
 ### Pinned host runtimes
 
 Devkit CLI commands respect the current checkout's `.nvmrc`, including non-interactive worktree
@@ -294,6 +322,7 @@ without starting the proxy, checking other projects, restoring data, or opening 
 | `devkit prune` | find orphaned checkout database volumes (`--yes` removes them) |
 | `devkit cleanup` | preview private linked-worktree resources; `--yes` permanently removes them |
 | `devkit infra` | start the proxy and current checkout database |
+| `devkit use [<dependency> <worktree> \| <dependency> --primary]` | show or choose which checkout of each dependency this checkout uses |
 | `devkit nginx` | print nginx configuration for the configured machine domains |
 | `devproxy add <name> <port>` | route any host process through `<name>.localhost` |
 

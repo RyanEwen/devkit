@@ -50,6 +50,7 @@ export function writeRoute(config, identity, port) {
   mkdirSync(config.routesDir, { recursive: true })
   const name = identity.slug
   const contents = `# Devkit checkout owner pid: ${process.pid}
+# Devkit checkout path: ${JSON.stringify(identity.toplevel ?? null)}
 # Rewritten on every \`npm run dev\`, removed on exit.
 http:
   routers:

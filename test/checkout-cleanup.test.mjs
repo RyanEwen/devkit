@@ -32,6 +32,8 @@ function fixture(t, options = {}) {
       stopRunner: async () => events.push(['stop-runner']),
       acquireRunner: () => { events.push(['lease']); return { release: () => events.push(['release']) } },
       releaseRoute: () => { events.push(['route']); return true },
+      removeTargets: () => events.push(['targets']),
+      targetsFile: () => null,
       ...options
     }
   }
@@ -44,6 +46,7 @@ test('cleanup removes only declared worktree volumes, holds the lease, and needs
   assert.ok(events.findIndex((e) => e[0] === 'stop-runner') < events.findIndex((e) => e[0] === 'stop'))
   assert.deepEqual(events.at(-1), ['release'])
   assert.ok(events.some((e) => e[0] === 'route'))
+  assert.ok(events.findIndex((e) => e[0] === 'targets') > events.findIndex((e) => e[1] === 'rm'))
   assert.ok(!events.some((e) => e.includes('compose') || e.includes('--force')))
 })
 
@@ -52,6 +55,17 @@ test('a preview does not stop runners or mutate resources', async (t) => {
   await cleanupCheckout(options)
   assert.ok(events.every((e) => ['ps', 'network', 'volume'].includes(e[0])))
   assert.ok(!events.some((e) => e.includes('rm')))
+  assert.ok(!events.some((e) => e[0] === 'targets'))
+})
+
+test('the preview and the result name the dependency targets file when one exists', async (t) => {
+  const { writeFileSync } = await import('node:fs')
+  const f = fixture(t)
+  const file = path.join(f.identity.toplevel, 'targets.json')
+  writeFileSync(file, '{}')
+  const lines = []
+  await cleanupCheckout({ ...f.options, yes: false, targetsFile: () => file, log: (line) => lines.push(line) })
+  assert.match(lines[0], new RegExp(`dependency targets: ${file.replaceAll('/', '\\/')}`))
 })
 
 test('primary checkouts are rejected before reading config or Docker', async (t) => {

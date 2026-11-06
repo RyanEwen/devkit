@@ -26,6 +26,7 @@ import { composeContainers, mariadbSql, postgresSql, probeDocker } from './docke
 import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, probeProjectDependencies } from './project-dependencies.mjs'
+import { declaredDependencyTargets, readDependencyTargets } from './dependency-targets.mjs'
 import { routeFilePath, optionalProxyListeners } from './proxy.mjs'
 import { fetchHealth } from './health-request.mjs'
 import { checkoutOrigins, publicOrigin } from './host-routing.mjs'
@@ -103,12 +104,28 @@ export async function runDoctor({ repoRoot, log = console.log }) {
       answering ? null : required ? 'the next dev start repairs the loopback proxy' : 'optional listener; local development uses IPv4 loopback')
   }
 
-  for (const result of await probeProjectDependencies(project.dependencies, { config })) {
+  // An unreadable selection must not be replaced by the primary checkout: report every dependency
+  // as unknown instead, and give project checks no origins rather than possibly wrong ones.
+  let targets = null
+  try {
+    targets = declaredDependencyTargets(readDependencyTargets(config, identity), project.dependencies)
+  } catch (error) {
+    report(BAD, 'dependency targets', error.message.replace(/^devkit: /, ''))
+    for (const dependency of project.dependencies) {
+      report(BAD, `needs ${dependency.name}`, 'checkout unknown until the targets file is fixed')
+    }
+  }
+  for (const result of targets ? await probeProjectDependencies(project.dependencies, { config, targets }) : []) {
+    const where = result.worktree ? ` (${result.worktree} worktree)` : ''
     report(
       result.ok ? OK : BAD,
       `needs ${result.dependency.name}`,
-      `${result.url} (${result.detail})`,
-      result.ok ? null : `start ${result.dependency.name} independently`
+      `${result.url}${where} (${result.detail})`,
+      result.ok
+        ? null
+        : result.worktree
+          ? `start ${result.dependency.name}'s ${result.worktree} worktree, or \`devkit use ${result.dependency.name} --primary\``
+          : `start ${result.dependency.name} independently`
     )
   }
 
@@ -176,7 +193,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     url: publicOrigin(identity.hostname, config),
     urls: checkoutOrigins(identity, config),
     domain: config.preferredDomain,
-    dependencyOrigins: dependencyOrigins(project.dependencies, config),
+    dependencyOrigins: targets ? dependencyOrigins(project.dependencies, config, targets) : {},
     repoRoot
   }
   for (const check of project.checks ?? []) {

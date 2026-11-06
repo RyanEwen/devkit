@@ -1,12 +1,13 @@
 /** Archive cleanup deliberately needs neither Compose interpolation nor installed app dependencies. */
 import { spawnSync } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 
 import { checkoutIdentity } from './checkout-identity.mjs'
 import { acquireCheckoutRunner, stopCheckoutRunner } from './checkout-runner.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { releaseProxy } from './proxy.mjs'
+import { dependencyTargetsPath, removeDependencyTargets } from './dependency-targets.mjs'
 
 function execute(command, args) {
   const result = spawnSync(command, args, { encoding: 'utf8', timeout: 30_000 })
@@ -83,7 +84,9 @@ export async function cleanupCheckout({
   repoRoot = process.cwd(), config, yes = false, paseo = false, env = process.env,
   log = console.log, identity = checkoutIdentity(repoRoot), load = loadProjectConfig,
   listWorkspaces = () => paseoWorkspaces({ env }), run = execute,
-  stopRunner = stopCheckoutRunner, acquireRunner = acquireCheckoutRunner, releaseRoute = releaseProxy
+  stopRunner = stopCheckoutRunner, acquireRunner = acquireCheckoutRunner, releaseRoute = releaseProxy,
+  removeTargets = removeDependencyTargets,
+  targetsFile = () => (config?.configDir ? dependencyTargetsPath(config, identity) : null)
 } = {}) {
   if (!identity) throw new Error('devkit: cleanup requires a Git checkout')
   if (identity.isPrimary) throw new Error('devkit: cleanup refuses primary checkouts; use the project dev:down command to stop them')
@@ -98,7 +101,9 @@ export async function cleanupCheckout({
   const project = await load(repoRoot)
   const names = cleanupVolumeNames(identity, project)
   const preview = resources(identity, names, run)
-  log(`[devkit] ${yes ? 'cleaning' : 'would clean'} ${identity.composeProject}: ${preview.containers.length} containers, ${preview.networks.length} networks, volumes: ${preview.volumes.join(', ') || '(none)'}`)
+  const targets = targetsFile()
+  const targetsNote = targets && existsSync(targets) ? `, dependency targets: ${targets}` : ''
+  log(`[devkit] ${yes ? 'cleaning' : 'would clean'} ${identity.composeProject}: ${preview.containers.length} containers, ${preview.networks.length} networks, volumes: ${preview.volumes.join(', ') || '(none)'}${targetsNote}`)
   if (!yes) {
     log('[devkit] preview only; pass --yes to permanently remove this worktree’s private development data')
     return preview
@@ -122,6 +127,7 @@ export async function cleanupCheckout({
     if (referenced()) throw new Error('devkit: a Paseo workspace reopened this worktree; data removal cancelled')
     // No force: Docker refuses any volume still mounted by another container.
     for (const volume of current.volumes) run('docker', ['volume', 'rm', volume])
+    removeTargets(config, identity)
     log('[devkit] removed private checkout resources; shared caches and baselines retained')
     return current
   } finally {

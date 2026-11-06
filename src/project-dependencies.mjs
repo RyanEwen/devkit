@@ -8,17 +8,28 @@
 
 import { normalizeDomain, publicOrigin, proxyRequest } from './host-routing.mjs'
 import { fetchHealth } from './health-request.mjs'
+import { targetFor } from './dependency-targets.mjs'
 
-/** The browser-facing URL for an independently running project. */
-export function dependencyUrl(dependency, settings = {}) {
+/**
+ * The browser-facing URL for an independently running project. `worktree`, when given, selects
+ * that project's linked worktree (`<worktree>.<name>.<domain>`) instead of its primary checkout.
+ */
+export function dependencyUrl(dependency, settings = {}, worktree = undefined) {
   const domain = normalizeDomain(typeof settings === 'number' ? undefined : settings.preferredDomain ?? settings.domain)
-  return `${publicOrigin(`${dependency.name}.${domain}`, settings)}${dependency.healthPath ?? '/'}`
+  const host = worktree ? `${worktree}.${dependency.name}.${domain}` : `${dependency.name}.${domain}`
+  return `${publicOrigin(host, settings)}${dependency.healthPath ?? '/'}`
 }
 
-/** Origins exposed to project env functions, keyed by dependency name. */
-export function dependencyOrigins(dependencies, settings = {}) {
+/**
+ * Origins exposed to project env functions, keyed by dependency name. `targets` maps dependency
+ * names to the worktree each should use (see dependency-targets.mjs); others use the primary.
+ */
+export function dependencyOrigins(dependencies, settings = {}, targets = {}) {
   return Object.fromEntries(
-    dependencies.map((dependency) => [dependency.name, new URL(dependencyUrl(dependency, settings)).origin])
+    dependencies.map((dependency) => [
+      dependency.name,
+      new URL(dependencyUrl(dependency, settings, targetFor(targets, dependency.name))).origin
+    ])
   )
 }
 
@@ -28,10 +39,11 @@ export function dependencyOrigins(dependencies, settings = {}) {
  */
 export async function probeProjectDependencies(
   dependencies,
-  { config, proxyPort = 80, fetchImpl = fetchHealth, timeoutMs = 2_000 } = {}
+  { config, proxyPort = 80, fetchImpl = fetchHealth, timeoutMs = 2_000, targets = {} } = {}
 ) {
   const probes = dependencies.map(async (dependency) => {
-    const url = dependencyUrl(dependency, config ?? proxyPort)
+    const worktree = targetFor(targets, dependency.name)
+    const url = dependencyUrl(dependency, config ?? proxyPort, worktree)
     const request = config ? proxyRequest(url, config) : { url }
     try {
       const response = await fetchImpl(request.url, {
@@ -39,9 +51,9 @@ export async function probeProjectDependencies(
         redirect: 'follow',
         signal: AbortSignal.timeout(timeoutMs)
       })
-      return { dependency, url, ok: response.ok, detail: `HTTP ${response.status}` }
+      return { dependency, worktree, url, ok: response.ok, detail: `HTTP ${response.status}` }
     } catch (error) {
-      return { dependency, url, ok: false, detail: error.cause?.message ?? error.message }
+      return { dependency, worktree, url, ok: false, detail: error.cause?.message ?? error.message }
     }
   })
 

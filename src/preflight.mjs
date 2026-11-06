@@ -32,6 +32,12 @@ import { databaseCompose, composeUp, mariadbSql, postgresSql, probeDocker } from
 import { selectDatabaseRuntime } from './database-runtime.mjs'
 import { loadProjectConfig } from './project-config.mjs'
 import { dependencyOrigins, failedProjectDependencies } from './project-dependencies.mjs'
+import {
+  declaredDependencyTargets,
+  describeWorktree,
+  readDependencyTargets,
+  runningDependencyWorktrees
+} from './dependency-targets.mjs'
 import { acquireProxy, ensureProxy } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
 import { checkoutHostnames, checkoutOrigins, publicOrigin, proxyRequest } from './host-routing.mjs'
@@ -109,6 +115,7 @@ async function prepareDevState({
   const identity = resolveDatabaseIdentity(checkout, project)
   const ports = checkoutPorts(identity, project.ports)
   const lines = []
+  const targets = dependencyTargets(config, identity, project, { teardown, lines })
 
   // Callers that consume one of these files before preflight can invoke inheritWorktreeFiles()
   // early. Everyone else still gets the guarantee here; copying twice is an idempotent no-op.
@@ -138,7 +145,7 @@ async function prepareDevState({
     // Their routes remain owned by their independent runners; no new checkout route is leased yet.
     if (checkDependencies && project.dependencies.length > 0) {
       if (!ensureProxy(config)) throw new PreflightError('the shared loopback proxy could not be started', 'run `devkit doctor`')
-      await requireProjectDependencies(config, project)
+      await requireProjectDependencies(config, project, targets)
     }
     waitForDatabase(config, project)
 
@@ -184,7 +191,7 @@ async function prepareDevState({
     directUrl: `http://localhost:${ports.web}`,
     database,
     databaseUrl,
-    dependencyOrigins: dependencyOrigins(project.dependencies, config),
+    dependencyOrigins: dependencyOrigins(project.dependencies, config, targets),
     configDir: config.configDir
   }
 
@@ -222,21 +229,48 @@ async function prepareDevState({
   return result
 }
 
+/**
+ * This checkout's selected dependency worktrees, read before any side effect so a damaged file stops
+ * startup cleanly. Teardown never contacts dependencies, so it only notes the problem and proceeds.
+ * Each selection is announced with the checkout it resolves to, so a surprising branch is visible.
+ */
+function dependencyTargets(config, identity, project, { teardown, lines }) {
+  let targets
+  try {
+    targets = declaredDependencyTargets(readDependencyTargets(config, identity), project.dependencies)
+  } catch (error) {
+    if (teardown) {
+      lines.push(`${error.message.replace(/^devkit: /, '')} (ignored while stopping)`)
+      return {}
+    }
+    throw new PreflightError(error.message.replace(/^devkit: /, ''), 'fix or delete that file, then run this project again')
+  }
+  if (teardown) return targets
+
+  for (const [name, worktree] of Object.entries(targets)) {
+    const running = runningDependencyWorktrees(config, name).find((entry) => entry.worktree === worktree)
+    const where = running ? describeWorktree(running) : 'not running yet'
+    lines.push(`${name} uses its ${worktree} worktree (${where}); \`devkit use ${name} --primary\` reverts`)
+  }
+  return targets
+}
+
 /** Verifies declared applications are alive but deliberately never starts or manages them. */
-async function requireProjectDependencies(config, project) {
-  let failures = await failedProjectDependencies(project.dependencies, { config })
+async function requireProjectDependencies(config, project, targets = {}) {
+  let failures = await failedProjectDependencies(project.dependencies, { config, targets })
   // A newly started file provider needs a moment to load existing dependency routes.
   for (let attempt = 0; failures.length > 0 && attempt < 5; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500))
-    failures = await failedProjectDependencies(project.dependencies, { config })
+    failures = await failedProjectDependencies(project.dependencies, { config, targets })
   }
   if (failures.length === 0) return
 
   const failed = failures.map(({ dependency, url, detail }) => `${dependency.name} at ${url} (${detail})`).join(', ')
-  const names = failures.map(({ dependency }) => dependency.name).join(', ')
+  const names = failures.map(({ dependency, worktree }) => worktree ? `${dependency.name}'s ${worktree} worktree` : dependency.name).join(', ')
+  const revert = failures.filter(({ worktree }) => worktree).map(({ dependency }) => `devkit use ${dependency.name} --primary`)
   throw new PreflightError(
     `required Devkit project${failures.length === 1 ? '' : 's'} not running: ${failed}`,
-    `start ${names} independently, then run this project again`
+    `start ${names} independently, then run this project again${revert.length ? ` (or \`${revert.join('`, `')}\` to use the primary checkout)` : ''}`
   )
 }
 

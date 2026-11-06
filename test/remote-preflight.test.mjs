@@ -130,3 +130,62 @@ test('preflight repairs the proxy before dependency probes without requiring rem
   })
   assert.deepEqual(requests, [{ host: 'api.unresolvable.invalid:8443', path: '/health' }])
 })
+
+test('a selected dependency worktree drives startup checks, env origins and doctor; a damaged choice never falls back', async (t) => {
+  const { createServer } = await import('node:http')
+  const { promisify } = await import('node:util')
+  const { execFile } = await import('node:child_process')
+  const { realpathSync } = await import('node:fs')
+  const root = mkdtempSync(path.join(tmpdir(), 'devkit-dependency-target-'))
+  const repo = path.join(root, 'app'), configDir = path.join(root, 'config'), bin = path.join(root, 'bin')
+  for (const directory of [repo, configDir, bin, path.join(configDir, 'infra')]) mkdirSync(directory, { recursive: true })
+  const requests = []
+  const server = createServer((request, response) => {
+    requests.push(request.headers.host)
+    response.writeHead(204).end()
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); rmSync(root, { recursive: true, force: true }) })
+  execFileSync('git', ['init', '-q', repo])
+  writeFileSync(path.join(repo, 'devkit.config.mjs'), `export default {
+    migrationsTable: null,
+    dependencies: [{ name: 'api', healthPath: '/health' }],
+    env: ({ dependencyOrigins }) => ({ API_ORIGIN: dependencyOrigins.api })
+  }`)
+  writeFileSync(path.join(configDir, 'host.json'), JSON.stringify({ enabled: true, proxyPort: server.address().port }))
+  writeFileSync(path.join(bin, 'docker'), `#!/usr/bin/env node
+    const args = process.argv.slice(2)
+    if (args[0] === 'version') console.log('test')
+    else if (args[0] === 'ps' && args.includes('-q')) console.log('test-container')
+    else if (args[0] === 'exec') console.log('1')
+  `, { mode: 0o755 })
+  const script = path.join(repo, 'dev.mjs')
+  writeFileSync(script, `
+    import { preflight } from ${JSON.stringify(new URL('../src/index.mjs', import.meta.url).href)}
+    const state = await preflight({ repoRoot: process.cwd(), log: null, teardown: process.argv.includes('--down') })
+    console.log(JSON.stringify({ origin: state.env.API_ORIGIN, lines: state.lines }))
+    state.runner?.release()
+  `)
+  const env = { ...process.env, DEVKIT: '1', DEVKIT_OPEN_BROWSER: '0', DEVKIT_CONFIG_DIR: configDir, PATH: `${bin}:${process.env.PATH}` }
+  const run = async (args = []) => JSON.parse((await promisify(execFile)(process.execPath, [script, ...args], { cwd: repo, env })).stdout)
+
+  const targets = path.join(configDir, 'dependency-targets', 'app.json')
+  mkdirSync(path.dirname(targets), { recursive: true })
+  writeFileSync(targets, JSON.stringify({ checkout: realpathSync(repo), dependencies: { api: 'pickup-limits' } }))
+  const started = await run()
+  assert.deepEqual(requests, [`pickup-limits.api.localhost:${server.address().port}`])
+  assert.equal(started.origin, `http://pickup-limits.api.localhost:${server.address().port}`)
+  assert.ok(started.lines.some((line) => line.startsWith('api uses its pickup-limits worktree')))
+
+  writeFileSync(targets, '{damaged')
+  requests.length = 0
+  await assert.rejects(promisify(execFile)(process.execPath, [script], { cwd: repo, env }), (error) => error.stderr.includes(targets))
+  assert.deepEqual(requests, [], 'a damaged choice is not replaced by the primary checkout')
+  const stopped = await run(['--down'])
+  assert.ok(stopped.lines.some((line) => line.includes('ignored while stopping')))
+
+  const cli = fileURLToPath(new URL('../bin/devkit.mjs', import.meta.url))
+  const doctor = spawnSync(process.execPath, [cli, 'doctor'], { cwd: repo, env, encoding: 'utf8' })
+  assert.match(doctor.stdout, /needs api\s+checkout unknown until the targets file is fixed/)
+  assert.deepEqual(requests, [], 'doctor does not probe the primary checkout instead')
+})
