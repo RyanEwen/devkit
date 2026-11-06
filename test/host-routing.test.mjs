@@ -3,7 +3,14 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 import { deriveCheckoutIdentity, checkoutPorts } from '../src/checkout-identity.mjs'
-import { checkoutOrigins, normalizeHostRouting, proxyHostnames, proxyRequest, publicOrigin } from '../src/host-routing.mjs'
+import {
+  checkoutOrigins,
+  containerProxyAddress,
+  normalizeHostRouting,
+  proxyHostnames,
+  proxyRequest,
+  publicOrigin
+} from '../src/host-routing.mjs'
 import { bootstrapSettings, nginxConfig, traefikConfig } from '../src/host-setup.mjs'
 import { dependencyOrigins, probeProjectDependencies } from '../src/project-dependencies.mjs'
 import { proxyCompose } from '../src/proxy.mjs'
@@ -152,4 +159,13 @@ test('localhost always uses its HTTP loopback port while remote TLS/public ports
   assert.deepEqual(proxyRequest('https://app.server.home:8443/ready?q=1', settings), {
     url: 'http://127.0.0.1:18080/ready?q=1', headers: { Host: 'app.server.home:8443', 'X-Forwarded-Proto': 'https' }
   })
+})
+
+test('containers reach the proxy at its private bind address in host mode, else through host-gateway', () => {
+  assert.equal(containerProxyAddress({ proxyNetwork: 'host', proxyBindAddress: '172.19.0.1' }), '172.19.0.1')
+  assert.equal(containerProxyAddress({ proxyNetwork: 'host', proxyBindAddress: '127.0.0.1' }), 'host-gateway')
+  assert.equal(containerProxyAddress({ proxyNetwork: 'host', proxyBindAddress: '::1' }), 'host-gateway')
+  assert.equal(containerProxyAddress({ proxyNetwork: 'host', proxyBindAddress: '127.0.0.2' }), 'host-gateway')
+  assert.equal(containerProxyAddress({ proxyNetwork: 'host' }), 'host-gateway')
+  assert.equal(containerProxyAddress({ proxyNetwork: 'bridge', proxyBindAddress: '127.0.0.1' }), 'host-gateway')
 })

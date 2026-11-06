@@ -49,6 +49,19 @@ export function normalizeHostRouting(settings = {}) {
   return { domain, secondaryDomains, preferredDomain, proxyPort, publicScheme, publicPort, proxyNetwork, proxyBindAddress }
 }
 
+/**
+ * The address a project container should map dependency hostnames to (Compose `extra_hosts`) to
+ * reach the shared proxy. In bridge mode Docker's `host-gateway` reaches the published proxy. In host
+ * mode the proxy listens only on loopback and the private bind address; a container cannot reach the
+ * host's loopback, so the private address is the one that works. `host-gateway` stays the fallback
+ * for a loopback-only host-mode machine, where containers have no route to the proxy at all.
+ */
+export function containerProxyAddress(config) {
+  const bind = config.proxyBindAddress
+  const privateBind = bind && !bind.startsWith('127.') && bind !== '::1'
+  return config.proxyNetwork === 'host' && privateBind ? bind : 'host-gateway'
+}
+
 export function checkoutHostnames(identity) {
   return [identity.hostname, ...(identity.secondaryHostnames ?? [])]
 }

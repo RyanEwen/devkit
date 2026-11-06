@@ -40,7 +40,7 @@ import {
 } from './dependency-targets.mjs'
 import { acquireProxy, ensureProxy } from './proxy.mjs'
 import { copyWorktreeFiles } from './worktree-files.mjs'
-import { checkoutHostnames, checkoutOrigins, publicOrigin, proxyRequest } from './host-routing.mjs'
+import { checkoutHostnames, checkoutOrigins, containerProxyAddress, publicOrigin, proxyRequest } from './host-routing.mjs'
 import { assertProjectRuntime } from './project-runtime.mjs'
 
 /** Fails the run with a message that names the fix, rather than a stack trace. */
@@ -192,6 +192,7 @@ async function prepareDevState({
     database,
     databaseUrl,
     dependencyOrigins: dependencyOrigins(project.dependencies, config, targets),
+    proxyAddress: containerProxyAddress(config),
     configDir: config.configDir
   }
 
@@ -281,12 +282,14 @@ async function requireProjectDependencies(config, project, targets = {}) {
  * two Vite settings that the PROXY requires rather than the project. Everything else is the
  * project's to name, because only it knows which variables its servers read.
  */
-function baseEnv({ identity, ports, url, urls, databaseUrl }) {
+function baseEnv({ identity, ports, url, urls, databaseUrl, proxyAddress }) {
   return {
     DATABASE_URL: databaseUrl,
     DEVKIT_URL: url,
     DEVKIT_HOSTNAME: identity.hostname,
     DEVKIT_URLS: JSON.stringify(urls),
+    /** Where a container reaches the proxy, e.g. `"platform.localhost:${DEVKIT_PROXY_ADDRESS}"` in extra_hosts. */
+    DEVKIT_PROXY_ADDRESS: proxyAddress,
     /**
      * The proxy reaches this checkout over `host.docker.internal`, and Docker Desktop's forwarding
      * on Windows/WSL only relays IPv4-bound listeners: Vite's `host: true` binds the IPv6 wildcard,

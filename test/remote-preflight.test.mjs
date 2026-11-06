@@ -50,6 +50,7 @@ test('preflight, doctor, and devproxy share preferred remote origins while prese
   const local = JSON.parse(run(script))
   assert.equal(local.url, 'http://app.localhost')
   assert.deepEqual(local.urls, ['http://app.localhost'])
+  assert.equal(local.env.DEVKIT_PROXY_ADDRESS, 'host-gateway')
   const remote = {
     enabled: true, secondaryDomains: ['server.home'], preferredDomain: 'server.home',
     proxyPort: 18080, publicPort: 80, proxyNetwork: 'host', proxyBindAddress: '172.24.0.1'
@@ -59,6 +60,7 @@ test('preflight, doctor, and devproxy share preferred remote origins while prese
   assert.equal(state.url, 'http://app.server.home')
   assert.deepEqual(state.urls, ['http://app.server.home', 'http://app.localhost:18080'])
   assert.equal(state.env.CLIENT_ORIGIN, state.url)
+  assert.equal(state.env.DEVKIT_PROXY_ADDRESS, '172.24.0.1')
   assert.deepEqual(JSON.parse(state.env.DEVKIT_URLS), state.urls)
   assert.equal(state.env.VITE_DEV_ALLOWED_HOSTS, 'app.server.home,app.localhost,localhost,127.0.0.1')
   assert.equal(state.identity.databaseName, local.identity.databaseName)

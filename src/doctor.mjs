@@ -29,7 +29,7 @@ import { dependencyOrigins, probeProjectDependencies } from './project-dependenc
 import { declaredDependencyTargets, readDependencyTargets } from './dependency-targets.mjs'
 import { routeFilePath, optionalProxyListeners } from './proxy.mjs'
 import { fetchHealth } from './health-request.mjs'
-import { checkoutOrigins, publicOrigin } from './host-routing.mjs'
+import { checkoutOrigins, containerProxyAddress, publicOrigin } from './host-routing.mjs'
 
 const OK = '+'
 const BAD = 'x'
@@ -194,6 +194,7 @@ export async function runDoctor({ repoRoot, log = console.log }) {
     urls: checkoutOrigins(identity, config),
     domain: config.preferredDomain,
     dependencyOrigins: targets ? dependencyOrigins(project.dependencies, config, targets) : {},
+    proxyAddress: containerProxyAddress(config),
     repoRoot
   }
   for (const check of project.checks ?? []) {

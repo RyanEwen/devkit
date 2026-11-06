@@ -104,7 +104,10 @@ The machine marker (`~/.config/devkit/host.json`, honoring `DEVKIT_CONFIG_DIR` a
 Without `--preferred-domain`, secondary domains add aliases while localhost stays preferred.
 `--secondary-domain` can be repeated; providing it replaces the saved secondary-domain list.
 `preflight()` provides the preferred `url` and all configured `urls` (preferred first), also exposed
-as `DEVKIT_URL` and JSON-encoded `DEVKIT_URLS`. The `domain` context value is the preferred suffix
+as `DEVKIT_URL` and JSON-encoded `DEVKIT_URLS`. `proxyAddress` (also `DEVKIT_PROXY_ADDRESS`) is the
+address a container should map dependency hostnames to in Compose `extra_hosts`: the private bind
+address in host-network mode, where Docker's `host-gateway` does not reach the proxy, and
+`host-gateway` otherwise. The `domain` context value is the preferred suffix
 for constructing sibling service hostnames without a runtime dependency. Projects that enforce browser origins should use
 `urls` to populate their own allowlist if they need both origins for cross-origin requests or auth.
 Vite's allowed hosts include every configured checkout hostname automatically. Browser storage,
@@ -279,7 +282,8 @@ directory and branch it selected. Startup repeats that line, so a surprising bra
 The choice applies only to the checkout where you ran the command, and takes effect on its next dev
 start: the startup health check, `devkit doctor`, and the `dependencyOrigins` passed to `env()`
 all use the selected worktree. A container that resolves dependency hostnames through
-`extra_hosts` should derive the hostname from `dependencyOrigins` rather than hard-coding it.
+`extra_hosts` should derive the hostname from `dependencyOrigins` rather than hard-coding it, and
+map it to `proxyAddress`, for example `"${PLATFORM_HOSTNAME}:${DEVKIT_PROXY_ADDRESS}"`.
 
 The choice is stored under `~/.config/devkit/dependency-targets`, never in either repository, with
 the path of the checkout that made it. If that checkout moves, or a new worktree reuses a removed
